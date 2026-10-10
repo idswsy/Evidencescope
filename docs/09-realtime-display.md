@@ -64,11 +64,17 @@ PACK12 为每样点 1.5 B（2 样点 → 3 B），**载荷减少 25%**。编解�
 - 主机：`scope-core` 的 `acquire` 请求 PACK12，并按**分片头回显的 `format`** 解码（不是按请求值）——设备有权回别的格式，按请求值解会把两种字节当同一种读。
 - 回归：`firmware/tests/test_proto_task.c` 的 PACK12 往返组（与 `acq_sample` 逐点相等）+ 主机端 `decode_chunk_samples` 单测 + scope-mcp 的「按回显格式解码」端到端测试。
 
-> **遗留缺陷（不在本次范围）**：`DEV_CAPS` 仍宣称 `CAP_FMT_MINMAX`，而 `cmd_read_buffer` 对 MINMAX 回 `ERR_UNSUPPORTED`。`App/proto_task.c` 上方数行恰有一段注释要求「不要声明做不到的能力」（针对 `CAP_CH_DUAL` / `CAP_COUPLING_AC`）——**此处仍未守住自己定的纪律**，须另行修复。
+> ~~**遗留缺陷（不在本次范围）**：`DEV_CAPS` 仍宣称 `CAP_FMT_MINMAX`……~~
+> **2026-10-10 已修（`4e165e6`）**：`DEV_CAPS` 摘掉了 `CAP_FMT_MINMAX` 与 `CAP_TRIG_SOFT`
+> 两个做不到的能力位（`cmd_read_buffer` 对 MINMAX 回 `ERR_UNSUPPORTED`、
+> `cmd_force_trigger` 恒回 `ERR_UNSUPPORTED`）。`proto_task.c` 上方那段
+> 「不要声明做不到的能力」的注释（针对 `CAP_CH_DUAL` / `CAP_COUPLING_AC`）**现已守住**，
+> 并在 `test_proto_task.c` 的 GET_INFO 组补了负向断言防回归。
+> 完整对照见 `docs/03-protocol.md` §11.2。
 >
-> **2026-10-10 复核补充**：同类缺陷**还有一处** —— `DEV_CAPS` 同时宣称 `CAP_TRIG_SOFT`，
-> 而 `cmd_force_trigger` 恒回 `ERR_UNSUPPORTED`（"soft trigger not wired yet"）。
-> 两条一起列进 `docs/03-protocol.md` §11 的实现状态清单。
+> ⚠ **仅真机侧已修**：主机侧模拟器（`host/crates/sim/src/device.rs`）的 `GET_INFO.caps`
+> 仍是旧的一套（含 `CAP_TRIG_SOFT` / `CAP_FMT_MINMAX` / `CAP_COUPLING_AC` /
+> I2C 场景下的 `CAP_CH_DUAL`），与真机不一致 —— 见 `docs/03-protocol.md` §11.4。
 
 ---
 

@@ -189,13 +189,13 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 >
 > | 命令 | 契约（本表） | 固件实测 |
 > |---|---|---|
-> | `PING` | 回显 payload **+ `tick_us`** | **只回显 payload，没有 `tick_us`**（`firmware/App/proto_task.c:437`）；**主机也不解析它**（`host/crates/core/src/command.rs:463-469` 只取 `len` + 回显数据）→ 于是 §6.6 承诺的"设备时钟偏移"目前**两端都没实现** |
-> | `RESET` | `Ack` 之后**软复位 ~50 ms** | **不软复位**：`acq_stop` + `acq_init`（配置回出厂值）+ `Ack`（`proto_task.c:380-391`） |
-> | `GET_INFO.caps` | 声明支持的触发模式与波形格式 | 声明了 `CAP_TRIG_SOFT` 与 `CAP_FMT_MINMAX`，但 `FORCE_TRIGGER` 回 `ERR_UNSUPPORTED`、`READ_BUFFER` 拒绝 MINMAX —— **又一处"声明了做不到的能力"**（`proto_task.c:27-28`，与同文件上方反对声明 `CAP_CH_DUAL` / `CAP_COUPLING_AC` 的注释自相矛盾）|
+> | `PING` | 回显 payload **+ `tick_us`** | **只回显 payload，没有 `tick_us`**（`case CMD_PING:`，`firmware/App/proto_task.c:443-445` 只 `send_frame(... f->payload ...)`）；**主机也不解析它**（`host/crates/core/src/command.rs:463-469` 只取 `len` + 回显数据）→ 于是 §6.6 承诺的"设备时钟偏移"目前**两端都没实现** |
+> | `RESET` | `Ack` 之后**软复位 ~50 ms** | **不软复位**：`acq_stop` + `acq_init`（配置回出厂值）+ `Ack`（`cmd_reset`，`proto_task.c:388-399`） |
+> | `GET_INFO.caps` | 声明支持的触发模式与波形格式 | ✅ **已修（`4e165e6`）**：原先声明 `CAP_TRIG_SOFT` 与 `CAP_FMT_MINMAX`，但 `FORCE_TRIGGER` 恒回 `ERR_UNSUPPORTED`、`READ_BUFFER` 拒绝 MINMAX —— 两位已从 `DEV_CAPS` 摘掉（`proto_task.c`），详见 §11.2 |
 >
 > `RESET` 不软复位对主机其实是好事（会话中途不断链），但契约页必须写清；
-> `PING.tick_us` 与 `caps` 两处要么补实现、要么改契约，不要悬着。
-> 逐条汇总见文末 §11。
+> `PING.tick_us` 仍两端都没实现，要么补实现、要么改契约，不要悬着；
+> `caps` 过度声明那处**已修**（`4e165e6`）。逐条汇总见文末 §11。
 
 ### 5.2 配置类 `0x02xx`
 
@@ -273,7 +273,9 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 
 > ⚠ **实现状态（2026-10-10 实测）**：
 > - **`FORCE_TRIGGER` 未实现** —— 固件恒回 `ERR_UNSUPPORTED`（"soft trigger not wired yet"，
->   `proto_task.c:274-279`），与 `caps` 里声明的 `CAP_TRIG_SOFT` 直接冲突（见 §5.1 的状态块）。
+>   `cmd_force_trigger`，`proto_task.c:282-287`）。原先 `caps` 还宣称 `CAP_TRIG_SOFT`，属自相矛盾；
+>   **该位已于 `4e165e6` 从 `DEV_CAPS` 摘掉**（见 §11.2），
+>   于是 `caps` 与行为重新一致 —— 但命令本身仍未实现。
 > - **流模式（`STREAMING`）未实现** —— `ACQ_MODE_STREAM` 只是被存进配置、从不进入该状态
 >   （`App/acq.c`），所以"分片之间轮询 RX"这条目前无从谈起。主机侧要连续观察走的是
 >   `scope_watch`（重复单次采集），不是流模式。
@@ -298,9 +300,9 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 - **`start_sample` 是绝对样点号** → 任何分片可独立识别、**按同偏移重拉即可，天然幂等**
 - `capture_id` 不符、或当前没有已冻结的采集 → `NO_DATA`
   （⚠ **不是 `BUSY`**：`BUSY` 只由状态机门禁产生，见 §11.3）
-- `count == 0` 或 `count > 1024` → `BAD_PARAM`（`proto_task.c:323`）
+- `count == 0` 或 `count > 1024` → `BAD_PARAM`（`proto_task.c:331`）
 - `start_sample >= window_len`（越界）→ **不是错误**：回一个 `count=0` + `LAST` 的空分片，
-  主机的分页循环靠它自然收尾（`proto_task.c:305-311`）
+  主机的分页循环靠它自然收尾（`proto_task.c:314-320`）
 - 分片末端超出窗口 → **截断到窗口末尾**（`end = window_len`），不是报错
 
 ### 5.5 测量类 `0x05xx`
@@ -324,7 +326,7 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 - 低信噪比时宁可回 `UNSUPPORTED` 或置 `quality` 标志，**不要回看似精确的垃圾数**
 - v1 允许回 `UNSUPPORTED`（主机用全速原始数据自己算，精度更高）
 - **实现状态（2026-10-10 实测）**：设备端**恒回 `ERR_UNSUPPORTED`**（`App/measure.c` 不存在，
-  `proto_task.c:393-399`）；主机侧也**从不调用它** —— `scope_measure` 走本地
+  `cmd_measure`，`proto_task.c:401-407`）；主机侧也**从不调用它** —— `scope_measure` 走本地
   `scope_core::measure()`。也就是说这条命令目前是"契约上有、两端都没走"。
   它不会骗人（不会回全 0 的"测量结果"），但也确实还没有设备侧实现。
 
@@ -345,8 +347,8 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 >
 > | CMD | 固件实际行为 |
 > |---|---|
-> | `0x0602` `SET_LOG_LEVEL` | 只回一个**空 `Ack`**，等级不存（`proto_task.c:478-481`） |
-> | `0x0603` `GET_LAST_ERROR` | 同上：**没有 `{code, severity, tick_us, msg}` 载荷**（`proto_task.c:478-481`） |
+> | `0x0602` `SET_LOG_LEVEL` | 只回一个**空 `Ack`**，等级不存（`case CMD_SET_LOG_LEVEL:`，`proto_task.c:486`） |
+> | `0x0603` `GET_LAST_ERROR` | 同上：**没有 `{code, severity, tick_us, msg}` 载荷**（`proto_task.c:487`） |
 > | `0x0610` / `0x0611` `MEM_*` | `protocol.h` 有定义，但 `handle_frame` 里**没有分支** → 落到 default 回 `UNKNOWN_CMD` |
 > | `0x0684` `EVENT_LOG` | **从不发出**：`proto_cmd_allowed` 的白名单里有它，但没有生产者 |
 >
@@ -424,10 +426,11 @@ uint16_t ring[4096];   // 8 KB，TIM 触发 ADC 以 857 kSPS 循环写，DMA1 Ch
 payload = `12 + ceil(count/2) × 3` 字节；主机按 `count` 截断，解出的第 `count+1` 个值丢弃。
 
 > ⚠ **实现状态（2026-10-10 实测）**：四种格式里**只有 `RAW16` 与 `PACK12` 实现了**。
-> `MINMAX` 与 `DELTA` 在 `READ_BUFFER` 会被明确拒掉（`ERR_UNSUPPORTED`，`proto_task.c:297-303`），
+> `MINMAX` 与 `DELTA` 在 `READ_BUFFER` 会被明确拒掉（`ERR_UNSUPPORTED`，`proto_task.c:309`），
 > `SET_ACQ` 也**不校验** `format` 字段（存下而已）。设备侧降采样因此还不存在 ——
 > 主机侧的 minmax 预览是**主机自己**在 `Capture::preview()` 里算的。
-> `caps` 却声明了 `CAP_FMT_MINMAX`，见 §5.1 状态块。
+> `caps` 原先还声明 `CAP_FMT_MINMAX`（与上面的拒绝自相矛盾），
+> **该位已于 `4e165e6` 摘掉**，见 §11.2 —— 但 MINMAX 格式本身仍未实现。
 
 `MINMAX` 桶大小建议：USB `D≥16`（250 KB/s），921600 串口 `D≥64`（62.5 KB/s）。D 由主机按时基选择，用分片头 `decimation` 字段声明。
 
@@ -444,7 +447,7 @@ payload = `12 + ceil(count/2) × 3` 字节；主机按 `count` 截断，解出�
 **设备 TX 背压**：USB 主机不读 / 串口流控关闭导致 TX 队列满时，**丢片并 `tx_dropped++`，绝不阻塞采样循环**。
 
 > ⚠ **实现状态（2026-10-10 实测）**：固件的 `GET_STATUS.tx_dropped` **恒为 0**
-> （`proto_task.c:162-164`，注释也写明了原因：`link_write` 是**直写阻塞**的，
+> （`proto_task.c:170-172`，注释也写明了原因：`link_write` 是**直写阻塞**的，
 > 没有发送队列，所以"丢片"这个动作根本不存在）。也就是说：
 > **它是"没被统计过"，不是"没有丢过"** —— 别拿它当链路健康的证据。
 > 规则 5「设备端绝不能阻塞」在直写实现下也没有被真正满足（主循环会等 TX 完成）。
@@ -571,6 +574,9 @@ aa 55           SYNC
 > 这一节记录**契约与实现的差距**。CI 的黄金向量保证的是「两端编解码一致」，
 > **不保证「设备实现了这条命令」** —— 本清单补的就是那个缺口。
 > 每条都注明出处行号，改代码或改契约时请同步改这里。
+>
+> ⚠ 行号是**写作时**的快照，已发生过漂移（例如 `4e165e6` 在 `proto_task.c` 顶部
+> 加了 8 行注释，此后该文件的行号整体 +8）。**引用时请按函数名检索，不要照抄行号。**
 
 ### 11.1 契约里写着、设备侧没做的
 
@@ -590,17 +596,29 @@ aa 55           SYNC
 | TX 背压丢片计数 `tx_dropped` | §6.5 | ❌ 恒 0（`link_write` 直写阻塞，没有发送队列） |
 | 用 `PING` 维护设备时钟偏移 | §6.6 | ❌ **两端都没实现** |
 
-### 11.2 能力位过度声明（`GET_INFO.caps`）
+### 11.2 能力位过度声明（`GET_INFO.caps`）—— ✅ 已修（`4e165e6`）
 
-| 位 | 声明 | 实际 | 出处 |
+| 位 | 修复前声明 | 实际 | 状态 |
 |---|---|---|---|
-| `CAP_TRIG_SOFT` | 支持软触发 | `FORCE_TRIGGER` 恒 `ERR_UNSUPPORTED` | `proto_task.c:27-28` vs `:274-279` |
-| `CAP_FMT_MINMAX` | 支持 MINMAX 格式 | `READ_BUFFER` 对 MINMAX 回 `ERR_UNSUPPORTED` | `proto_task.c:27-28` vs `:297-303` |
+| `CAP_TRIG_SOFT` | 支持软触发 | `FORCE_TRIGGER` 恒 `ERR_UNSUPPORTED`（`cmd_force_trigger`，`proto_task.c:282-287`） | ✅ 已从 `DEV_CAPS` 摘掉 |
+| `CAP_FMT_MINMAX` | 支持 MINMAX 格式 | `READ_BUFFER` 对 MINMAX 回 `ERR_UNSUPPORTED`（`proto_task.c:309`） | ✅ 已从 `DEV_CAPS` 摘掉 |
 
-> 两处都违反了 `proto_task.c:19-26` 自己立下的规矩（「不要在这里声明做不到的能力」，
+> 两处都违反了 `proto_task.c` 自己立下的规矩（「不要在这里声明做不到的能力」，
 > 那里针对的是 `CAP_CH_DUAL` / `CAP_COUPLING_AC`）。
-> **修法二选一**：真的实现它，或把位从 `DEV_CAPS` 摘掉。别留着 ——
-> 主机与 Agent 会**照着 `caps` 规划动作**，声明了做不到的能力等于给它们设陷阱。
+> `caps` 是**给 Agent 看的**：主机侧没有任何代码按它分支决策
+> （`command.rs:78` 只解析、`cli/main.rs:512` 只打印），
+> 所以声明了做不到的能力 = 让 Agent 规划出必然失败的动作。
+>
+> **2026-10-10 已按「摘掉」修复**：`DEV_CAPS` 现为
+> `CAP_TRIG_AUTO | CAP_TRIG_NORMAL | CAP_TRIG_SINGLE | CAP_FMT_PACK12`。
+> `test_proto_task.c` 的 GET_INFO 组补了三条守卫（两条负向 + `CAP_FMT_PACK12` 正向），
+> 已验证：把 `CAP_TRIG_SOFT` 加回去会让该组以
+> `FAIL [GET_INFO 往返] 软触发未实现…不该声明` 失败（固件断言 249 → 252）。
+> 若将来真的实现软触发 / MINMAX 打包，请同步改回本节与那三条断言。
+>
+> ⚠ **仍未对齐**：主机侧模拟器 `host/crates/sim/src/device.rs:458-469` 仍声明
+> `CAP_TRIG_SOFT` / `CAP_FMT_MINMAX`（还多 `CAP_COUPLING_AC`、`CAP_DIGITAL_I2C`、
+> 以及 I2C 场景下 `CAP_CH_DUAL`），与真机 `caps` 不一致 —— 见 §11.4。
 
 ### 11.3 契约没写清、而实现已经依赖的
 
@@ -611,10 +629,36 @@ aa 55           SYNC
   `end` 超出窗口则截断；"对未冻结的采集区"回的是 `NO_DATA` 而**不是 `BUSY`**。
   §5.4 原先写的「越界 → `BAD_PARAM`；未冻结 → `BUSY`」与实现不符，已改。
 - **`GET_STATUS.err_flags` 的位定义**：契约页没定义，实现只用了 bit0（本次采集发生过溢出，
-  `proto_task.c:148-149`）。**建议在 §5.1 补上位定义**。
+  `proto_task.c:157`）。**建议在 §5.1 补上位定义**。
 - **`ECHO` 的 512 B 上限**：靠接收缓冲隐式限制，不是显式校验。
 
-### 11.4 主机侧（host）的对应缺口
+### 11.4 模拟器与真机的 `caps` 不一致（⚠ 未修）
+
+`host/crates/sim/src/device.rs:458-469` 的 `GET_INFO.caps` 比真机**多声明 5 项**：
+
+| 位 | 模拟器 | 真机 `DEV_CAPS` | 说明 |
+|---|---|---|---|
+| `CAP_TRIG_SOFT` | ✅ 声明 | ❌ 已摘（`4e165e6`） | 模拟器**实现了**软触发（`device.rs:396-403` 真会 `complete_capture()`） |
+| `CAP_FMT_MINMAX` | ✅ 声明 | ❌ 已摘 | 模拟器**实现了** MINMAX（`device.rs:746` 有编码分支） |
+| `CAP_COUPLING_AC` | ✅ 声明 | ❌ 从不声明 | 模拟器把 `coupling` 当参数收下（`device.rs:580-593`）；真机耦合是手拨开关 SW2 |
+| `CAP_DIGITAL_I2C` | ✅ 声明 | ❌ 从不声明 | 真机数字通路尚未实现（P2） |
+| `CAP_CH_DUAL` | I2C 场景下声明 | ❌ 从不声明 | 模拟器 I2C 场景 `ch_count=2`（`sim/src/lib.rs:368`）；真机 `DEV_CH_COUNT == 1` |
+
+> **问题**：模拟器自述是「复刻真实行为」（`host/crates/sim/src/lib.rs:1-4`），但它的 `caps`
+> 描述的是**它自己会做什么**，不是**真机做得到什么**。Agent 拿 MCP 工具对着模拟器开发时，
+> 会照着这套 `caps` 规划出真机必然拒绝的动作（`FORCE_TRIGGER` → `ERR_UNSUPPORTED`、
+> MINMAX → `ERR_UNSUPPORTED`、AC 耦合 → 无效）。
+>
+> **为什么不跟 §11.2 一起改**：改 `caps` 要同时动行为（否则 `caps` 与实际能力再次不一致），
+> 会波及既存测试 —— `sim/src/lib.rs:244` 调用 `bus.force_trigger()`、
+> `:368` 断言 I2C 场景 `ch_count == 2`。所以这是**独立决定**：
+> 要么让模拟器退化到真机能力（则上述测试要改写），
+> 要么给模拟器加一个「真机模式 / 理想模式」开关。
+>
+> 注：主机侧**没有任何代码**按 `caps` 分支决策（`command.rs:78` 只解析、`cli/main.rs:512` 只打印），
+> 所以这是**面向 Agent 的信息真实性**问题，不是主机功能问题。
+
+### 11.5 主机侧（host）的对应缺口
 
 - `PING` 的 `tick_us` 不解析（见 §5.1 / §6.6）。
 - MCP 的 `scope_measure` 只出口 **AC-RMS**（`ac_rms_v`，`session.rs:879`）；
