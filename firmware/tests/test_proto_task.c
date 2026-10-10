@@ -192,7 +192,13 @@ static void case_get_info_roundtrip(void)
         CHECK((r.caps & CAP_CH_DUAL) == 0, "不该声明双通道能力");
         CHECK((r.caps & CAP_COUPLING_AC) == 0,
               "耦合是手拨开关 SW2，不该声明 AC 耦合能力");
+        /* 同上：这两条能力没实现，声明了 Agent 就会去调必然失败的命令。 */
+        CHECK((r.caps & CAP_TRIG_SOFT) == 0,
+              "软触发未实现（FORCE_TRIGGER 恒回 ERR_UNSUPPORTED），不该声明");
+        CHECK((r.caps & CAP_FMT_MINMAX) == 0,
+              "MINMAX 打包未实现（READ_BUFFER 拒绝该格式），不该声明");
         CHECK((r.caps & CAP_TRIG_AUTO) != 0, "auto 触发是实现了的");
+        CHECK((r.caps & CAP_FMT_PACK12) != 0, "PACK12 是实现了的");
     }
 }
 

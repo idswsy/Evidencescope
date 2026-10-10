@@ -23,9 +23,17 @@ static const uint8_t DEV_UID[12] = {0xAA, 0x55, 0x00, 0x00, 0x00, 0x00,
  * 声明了它，主机就会去拉一个不存在的通道。
  *
  * `CAP_COUPLING_AC` 同理：耦合是手拨开关 SW2，AI 无法程控 ——
- * 说支持 AC 耦合会让 Agent 以为能切。 */
+ * 说支持 AC 耦合会让 Agent 以为能切。
+ *
+ * `CAP_TRIG_SOFT` 与 `CAP_FMT_MINMAX` 同样不许声明，理由和上面一样：
+ *   - 软触发没有实现 —— `cmd_force_trigger()` 恒回 `ERR_UNSUPPORTED`；
+ *   - MINMAX 打包没有实现 —— `cmd_read_buffer()` 对 MINMAX 回
+ *     `ERR_UNSUPPORTED`（只有 RAW16 / PACK12 有编码分支）。
+ * 主机与 Agent 会照 `caps` 规划动作，声明了做不到的能力 = 让 Agent
+ * 去调一个必然失败的命令。真要声明，请先把上面两处实现补上，
+ * 并同步 `firmware/tests/test_proto_task.c` 的负向断言。 */
 #define DEV_CAPS (CAP_TRIG_AUTO | CAP_TRIG_NORMAL | CAP_TRIG_SINGLE | \
-                  CAP_TRIG_SOFT | CAP_FMT_PACK12 | CAP_FMT_MINMAX)
+                  CAP_FMT_PACK12)
 
 /* 本板采集窗里只有 1 个通道（模拟通路）。 */
 #define DEV_CH_COUNT 1u
