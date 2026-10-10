@@ -157,7 +157,7 @@ F103/
 # 1. 协议测试：C 与 Rust 两端跑同一份黄金向量
 ./proto/run_tests.sh            # C 端，50 项
 ./host/run.sh test              # Rust 端：要求所有 test result 为 ok（条数不写死）
-./firmware/run_tests.sh         # 固件 App 层，7 个测试程序 / 249 项断言，在 PC 上运行
+./firmware/run_tests.sh         # 固件 App 层，7 个测试程序 / 252 项断言，在 PC 上运行
 
 # 2. 对模拟器采集一次波形
 ./host/run.sh run -p scope-cli -- sim capture --scenario sine_1k_3v3 -n 1024 -o wave.csv
@@ -243,7 +243,7 @@ AI 分析、故障注入、日志、帮助。
 
 串口默认参数 921600 8N1。`firmware/App/` 的硬件无关层（hal / trigger / acq /
 proto_task / waveform / freq_meter / local_input / local_policy，覆盖 17 条命令）
-已实现并通过 **249 项**断言（7 个测试程序）；`firmware/Hardware/` 的 21 个文件与
+已实现并通过 **252 项**断言（7 个测试程序）；`firmware/Hardware/` 的 21 个文件与
 Keil 工程（`synthesize-project.uvprojx`）**也都已实现并可编译**（ARMCC V5.06
 update 5，0 Error / 0 Warning）。**尚未做的是真机验证**，不是"没写"。
 烧录路径与接线见 [firmware/README.md](firmware/README.md)
@@ -355,7 +355,7 @@ GUI 按交接快照自动重连设备；运行期间可「终止」；设备收�
 | 阶段 | 目标 | 状态 | 验收标准 |
 |---|---|---|---|
 | P0 | 协议闭环（无硬件） | 完成 | 黄金向量在 C 与 Rust 两端全绿；`sim` 可完成 capture |
-| P1 | 最简硬件闭环 | 固件侧已完成：`App/` 与 `Hardware/` 全部实现、Keil 工程可编译（249 项 PC 断言，0 Error / 0 Warning）；**真机采集未验证** | F103 采 2048 点 → 串口 → CLI 落 CSV → 绘图 |
+| P1 | 最简硬件闭环 | 固件侧已完成：`App/` 与 `Hardware/` 全部实现、Keil 工程可编译（252 项 PC 断言，0 Error / 0 Warning）；**真机采集未验证** | F103 采 2048 点 → 串口 → CLI 落 CSV → 绘图 |
 | P2 | 数字通路 I2C 解码 | 进行中：主机侧完成；**固件侧未开始**（`App/i2c_decode.c` 与边沿时间戳缓冲均未创建） | 100 kHz / 400 kHz / 1 MHz 实总线解码结果与逻辑分析仪一致 |
 | P3 | MCP + Agent | 完成，见 [docs/08](docs/08-agent-walkthrough.md) | Agent 一句话完成「抓一次 I2C 写时序并说明 NACK 原因」 |
 | P4 | 增强 | 进行中：GUI、历史、导出、AI 分析面板已完成；板载屏幕已**冻结**（`display.c` 移出 Keil 工程，代码保留，见 [docs/09](docs/09-realtime-display.md) §4.4）；改板与自动量程未做 | 双通道改板、自动量程、等效时间采样 |

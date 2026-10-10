@@ -53,7 +53,7 @@ cd host && cargo test       # Rust 端全部测试
 | 本机输入与测频 | `firmware/App/local_input.c` · `local_policy.c` · `freq_meter.c` | ✅ 编码器/按键/测频，均为纯逻辑 |
 | 硬件层 | `firmware/Hardware/src/`（10 个源文件 + 11 个头） | ✅ ADC/DMA 采集环、USART 链路、hal 装配、TFT、本机 IO/测频/函数发生器 |
 | Keil 工程 | `firmware/MDK-ARM/synthesize-project.uvprojx` | ✅ 可编译（ARMCC V5.06 update 5，**0 Error / 0 Warning**，Flash 19.02 KB / RAM 18.46 KB） |
-| PC 端测试 | `firmware/run_tests.sh` | ✅ 7 个测试程序 / **249 项断言** |
+| PC 端测试 | `firmware/run_tests.sh` | ✅ 7 个测试程序 / **252 项断言** |
 | **标定表** | `host/crates/core/src/calib.rs` | ✅ 按设备 `uid` 索引；CLI 写入（`scope-cli cal set`），GUI / MCP 只读。**四个前端全部接上**，未标定时三端都如实标出。⚠ 真值仍需上板实测 —— 见 `docs/02-hardware.md` §9 |
 
 跑法：`./firmware/run_tests.sh` —— **不需要板子、不需要 Keil、不需要交叉编译**，

@@ -23,7 +23,7 @@
 > | `App/i2c_decode.c` | ⏳ 未实现（数字通路，且本板只有一路比较器，见 ADR-010） |
 > | `App/ui.c` | ⏳ 未实现（屏幕渲染在 `Hardware/src/display.c`，现已冻结） |
 > | `Hardware/**` | ✅ 21 个文件已实现（ADC/DMA 采集环、USART 链路、hal 装配、TFT、本机 IO/测频/函数发生器） |
-> | `tests/` | ✅ 7 个测试程序 / **249 项断言**，PC 上跑 |
+> | `tests/` | ✅ 7 个测试程序 / **252 项断言**，PC 上跑 |
 > | `MDK-ARM/` | ✅ `synthesize-project.uvprojx` + 构建产物（`.axf` / `.hex` / `.map`） |
 >
 > 这一半能先做出来，靠的正是下面那条纪律 —— **`App/` 不碰 HAL，
