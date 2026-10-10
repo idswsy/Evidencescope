@@ -4,7 +4,9 @@
 > `docs/03-protocol.md` + `proto/protocol.h` + `host/crates/proto/src/lib.rs` + `proto/tests/vectors.json`。
 > CI 会跑两端黄金向量，不同步就红。
 
-版本：`0x10`（主 1 / 次 0） · 状态：草案 · 最后更新：2026-10-03
+版本：`0x10`（主 1 / 次 0） · 状态：v1 生效（C 与 Rust 两端逐字节一致，50 项黄金向量全绿）
+最后更新：2026-10-10 · ⚠ **设备侧尚未实现的部分逐条列在文末 [§11](#11-实现状态2026-10-10-实测)** ——
+那份清单是实测结果，不是待办愿望；把它当成本契约的"当前实现覆盖率"来读。
 
 ---
 
@@ -75,6 +77,14 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 | 设备 → 主机 | **2060 B** | **2072 B** | 12 B 分片头 + 1024 样点 × u16 |
 | 主机 → 设备 | **512 B** | 524 B | 实际命令都 ≤ 64 B，超限回 `BAD_LEN` |
 
+> ⚠ **实现状态（2026-10-10）**：设备侧**没有强制上行 512 B 这条上限** ——
+> `PROTO_MAX_PAYLOAD_RX` 只在 `GET_INFO` 里被如实上报（`proto_task.c` 的 `max_rx_payload`），
+> 解析器判越界用的是 `PROTO_MAX_PAYLOAD_TX`(2060)（`protocol.c:229`），
+> 而设备接收缓冲只有 `PROTO_MAX_FRAME_RX`(524)。所以 >512 B 的上行帧不会被回
+> `BAD_LEN`，而是先撞上缓冲上限、按"丢最旧字节"处理。
+> 主机侧在本地就拦住了（`scope-core` 的 `transaction` 拒绝 >512 B 的载荷），
+> 正常路径碰不到它。见文末 §11。
+
 > ⚠️ **`MAX_PAYLOAD_TX` 是 2060，不是 2048。**
 > 波形分片的 **12 字节分片头是算在 payload 之内的** ——
 > 1024 × 2 + 12 = 2060。写成 2048 会让满载分片超限，这是很容易算漏的一处。
@@ -138,7 +148,14 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 > 契约页的错比别处的错更贵：它会被人当成行为去依赖。
 
 **重试安全**：设备缓存**最近一次的 `(seq, CMD, 完整响应)`**，同一 seq 在 1 s 内重发**直接回放**，保证 `ARM` 等非幂等命令的重试安全。
-缓存仅 1 槽 → **主机不得并发流水多个非幂等请求**。
+
+> ⚠ **实现状态（2026-10-10 实测）**：**设备端尚未实现这个缓存** —— `proto_task_t`
+> 里没有它（见 `firmware/App/proto_task.h`），`App/proto_task.c` 也没有任何去重逻辑；
+> 目前只有模拟器 `host/crates/sim` 实现了单槽回放。
+> 主机侧的重试策略按本条设计（沿用同一 seq 重发），因此**真机上重试 `ARM` 会被重新执行**。
+> 见文末 §11。
+>
+> 缓存只有 1 槽 → **主机不得并发流水多个非幂等请求**。
 
 ---
 
@@ -168,15 +185,49 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 
 `RESET` 用 `magic` 防误触发。主机需重新 `GET_INFO` 并重置 seq。
 
+> ⚠ **实现状态（2026-10-10 实测）** —— 本节有三处**契约与固件不一致**：
+>
+> | 命令 | 契约（本表） | 固件实测 |
+> |---|---|---|
+> | `PING` | 回显 payload **+ `tick_us`** | **只回显 payload，没有 `tick_us`**（`firmware/App/proto_task.c:437`）；**主机也不解析它**（`host/crates/core/src/command.rs:463-469` 只取 `len` + 回显数据）→ 于是 §6.6 承诺的"设备时钟偏移"目前**两端都没实现** |
+> | `RESET` | `Ack` 之后**软复位 ~50 ms** | **不软复位**：`acq_stop` + `acq_init`（配置回出厂值）+ `Ack`（`proto_task.c:380-391`） |
+> | `GET_INFO.caps` | 声明支持的触发模式与波形格式 | 声明了 `CAP_TRIG_SOFT` 与 `CAP_FMT_MINMAX`，但 `FORCE_TRIGGER` 回 `ERR_UNSUPPORTED`、`READ_BUFFER` 拒绝 MINMAX —— **又一处"声明了做不到的能力"**（`proto_task.c:27-28`，与同文件上方反对声明 `CAP_CH_DUAL` / `CAP_COUPLING_AC` 的注释自相矛盾）|
+>
+> `RESET` 不软复位对主机其实是好事（会话中途不断链），但契约页必须写清；
+> `PING.tick_us` 与 `caps` 两处要么补实现、要么改契约，不要悬着。
+> 逐条汇总见文末 §11。
+
 ### 5.2 配置类 `0x02xx`
 
 | CMD | 名称 | 请求 | 响应 |
 |---|---|---|---|
-| `0x0200` | `GET_CONFIG` | 空 | 全部可设置项镜像 |
+| `0x0200` | `GET_CONFIG` | 空 | 全部可设置项镜像（**实际是手拼的 17 字节，见下方布局**） |
 | `0x0201` | `SET_SAMPLE_RATE` | `{requested_hz:u32}` | **`{actual_hz:u32}`** |
 | `0x0202` | `SET_CHANNEL` | `{ch:u8, enable:u8, range_idx:u8, coupling:u8, offset_lsb:i16}` | 回显生效值 |
 | `0x0203` | `SET_TRIGGER` | `{mode:u8, source:u8, edge:u8, level_lsb:u16, pre_samples:u16, holdoff_us:u32}` | 回显生效值 |
 | `0x0204` | `SET_ACQ` | `{mode:u8, capture_samples:u16, format:u8, decimation:u16}` | `Ack` + 回显 |
+
+**`GET_CONFIG` 的实际线上布局（17 字节，小端）** —— 协议里**没有** `config_resp_t` 这个
+结构体，设备是手拼的，主机按同样的偏移读（`host/crates/core/src/command.rs` 的
+`DeviceConfig::decode`）。**两边都不许改**：
+
+```
+偏移  长度  字段                说明
+ 0     4   rate_hz            u32，实际生效的采样率（量化后）
+ 4     1   acq_mode           u8，0=single / 1=stream
+ 5     2   capture_samples    u16
+ 7     1   format             u8，0=RAW16 / 1=PACK12 / 2=MINMAX
+ 8     2   decimation         u16
+10     1   trigger_mode       u8，0=auto / 1=normal / 2=single
+11     1   trigger_source     u8，0=CH1 / 1=CH2 / 2=SOFT
+12     1   trigger_edge       u8，0=rising / 1=falling
+13     2   trigger_level_lsb  u16（ADC LSB）
+15     1   ch0_enable         u8，固件恒为 1
+16     1   ch0_coupling       u8，固件恒为 0（DC）
+```
+
+> ⚠ 因此 **`GET_CONFIG` 不回 `range_idx` 与 `offset_lsb`** —— 这两个字段在设备侧
+> 只有 `SET_CHANNEL` 能写、读不回来（README §5.4.4 已把这条列为"交给 AI 采集"的已知限制）。
 
 **`SET_SAMPLE_RATE` 必须回显**：F103 只有 72 MHz / 定时器整数分频的量化档位，主机时间轴一律用 `actual_hz`。
 
@@ -213,12 +264,20 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 |---|---|---|---|---|
 | `0x0301` | `ARM` | 空 | `Ack`（已武装） | ❌ 靠 seq 去重 |
 | `0x0302` | `STOP` | 空 | `Ack`（已停也回 Ack，不报错） | ✅ |
-| `0x0303` | `FORCE_TRIGGER` | 空 | `Ack`，仅 `ARMED` 有效 | ✅ |
+| `0x0303` | `FORCE_TRIGGER` | 空 | `Ack`，仅 `ARMED` 有效 **（⚠ 固件回 `ERR_UNSUPPORTED`，见下）** | ✅ |
 
 单次模式：触发后发 `EVENT_TRIGGER`，数据冻结，主机用 `READ_BUFFER` 随机拉取。
 流模式：按 `SET_ACQ` 的 format/decimation 持续推分片直到 `STOP`。
 
 **流模式的设备发送循环必须在分片之间轮询 RX**，以保证 `STOP` 及时生效（目标延迟 < 100 ms）。
+
+> ⚠ **实现状态（2026-10-10 实测）**：
+> - **`FORCE_TRIGGER` 未实现** —— 固件恒回 `ERR_UNSUPPORTED`（"soft trigger not wired yet"，
+>   `proto_task.c:274-279`），与 `caps` 里声明的 `CAP_TRIG_SOFT` 直接冲突（见 §5.1 的状态块）。
+> - **流模式（`STREAMING`）未实现** —— `ACQ_MODE_STREAM` 只是被存进配置、从不进入该状态
+>   （`App/acq.c`），所以"分片之间轮询 RX"这条目前无从谈起。主机侧要连续观察走的是
+>   `scope_watch`（重复单次采集），不是流模式。
+> 见文末 §11。
 
 ### 5.4 读取类 `0x04xx`
 
@@ -237,7 +296,12 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 - `count` 上限：`RAW16` / `PACK12` ≤ 1024 样点；`MINMAX` ≤ 512 对
   （两者都是 payload ≤ 2060 B；`PACK12` 因为 2 样点挤进 3 字节，只占 1548 B）
 - **`start_sample` 是绝对样点号** → 任何分片可独立识别、**按同偏移重拉即可，天然幂等**
-- `capture_id` 不符 → `NO_DATA`；越界 → `BAD_PARAM`；对未冻结的采集区 → `BUSY`
+- `capture_id` 不符、或当前没有已冻结的采集 → `NO_DATA`
+  （⚠ **不是 `BUSY`**：`BUSY` 只由状态机门禁产生，见 §11.3）
+- `count == 0` 或 `count > 1024` → `BAD_PARAM`（`proto_task.c:323`）
+- `start_sample >= window_len`（越界）→ **不是错误**：回一个 `count=0` + `LAST` 的空分片，
+  主机的分页循环靠它自然收尾（`proto_task.c:305-311`）
+- 分片末端超出窗口 → **截断到窗口末尾**（`end = window_len`），不是报错
 
 ### 5.5 测量类 `0x05xx`
 
@@ -259,6 +323,10 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 - RMS / 方差**必须用 `u64` 累加**（`4095² × 4096 ≈ 2³⁶`，u32 必溢出）
 - 低信噪比时宁可回 `UNSUPPORTED` 或置 `quality` 标志，**不要回看似精确的垃圾数**
 - v1 允许回 `UNSUPPORTED`（主机用全速原始数据自己算，精度更高）
+- **实现状态（2026-10-10 实测）**：设备端**恒回 `ERR_UNSUPPORTED`**（`App/measure.c` 不存在，
+  `proto_task.c:393-399`）；主机侧也**从不调用它** —— `scope_measure` 走本地
+  `scope_core::measure()`。也就是说这条命令目前是"契约上有、两端都没走"。
+  它不会骗人（不会回全 0 的"测量结果"），但也确实还没有设备侧实现。
 
 ### 5.6 调试与事件 `0x06xx`
 
@@ -272,6 +340,18 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 | `0x0682` | `EVENT_TRIGGER` | 设备→主机 `{capture_id:u16, trigger_index:u32, tick_us:u32, rate_hz:u32, n_samples:u32}` |
 | `0x0683` | `EVENT_OVERRUN` | 设备→主机 `{dropped_samples:u32, capture_id:u16}` |
 | `0x0684` | `EVENT_LOG` | 设备→主机 `{level:u8, tick_us:u32, len:u8, utf8[]}` |
+
+> ⚠ **实现状态（2026-10-10 实测）** —— 本节**已实现的只有 `ECHO`、`EVENT_TRIGGER`、`EVENT_OVERRUN`**：
+>
+> | CMD | 固件实际行为 |
+> |---|---|
+> | `0x0602` `SET_LOG_LEVEL` | 只回一个**空 `Ack`**，等级不存（`proto_task.c:478-481`） |
+> | `0x0603` `GET_LAST_ERROR` | 同上：**没有 `{code, severity, tick_us, msg}` 载荷**（`proto_task.c:478-481`） |
+> | `0x0610` / `0x0611` `MEM_*` | `protocol.h` 有定义，但 `handle_frame` 里**没有分支** → 落到 default 回 `UNKNOWN_CMD` |
+> | `0x0684` `EVENT_LOG` | **从不发出**：`proto_cmd_allowed` 的白名单里有它，但没有生产者 |
+>
+> `ECHO` 的"≤512"上限由**设备接收缓冲**隐式限制（见 §2 的状态块），不是显式校验。
+> 见文末 §11。
 
 **固件日志必须走 `0x0684 EVENT_LOG` 帧（或独立调试 UART），严禁裸 `printf` 混入二进制流。**
 
@@ -343,6 +423,12 @@ uint16_t ring[4096];   // 8 KB，TIM 触发 ADC 以 857 kSPS 循环写，DMA1 Ch
 `PACK12` 的 `count` 为奇数时的约定：**末样点与 `0` 凑成一对**，
 payload = `12 + ceil(count/2) × 3` 字节；主机按 `count` 截断，解出的第 `count+1` 个值丢弃。
 
+> ⚠ **实现状态（2026-10-10 实测）**：四种格式里**只有 `RAW16` 与 `PACK12` 实现了**。
+> `MINMAX` 与 `DELTA` 在 `READ_BUFFER` 会被明确拒掉（`ERR_UNSUPPORTED`，`proto_task.c:297-303`），
+> `SET_ACQ` 也**不校验** `format` 字段（存下而已）。设备侧降采样因此还不存在 ——
+> 主机侧的 minmax 预览是**主机自己**在 `Capture::preview()` 里算的。
+> `caps` 却声明了 `CAP_FMT_MINMAX`，见 §5.1 状态块。
+
 `MINMAX` 桶大小建议：USB `D≥16`（250 KB/s），921600 串口 `D≥64`（62.5 KB/s）。D 由主机按时基选择，用分片头 `decimation` 字段声明。
 
 ### 6.5 丢帧与重传（明确取舍）
@@ -357,12 +443,22 @@ payload = `12 + ceil(count/2) × 3` 字节；主机按 `count` 截断，解出�
 
 **设备 TX 背压**：USB 主机不读 / 串口流控关闭导致 TX 队列满时，**丢片并 `tx_dropped++`，绝不阻塞采样循环**。
 
+> ⚠ **实现状态（2026-10-10 实测）**：固件的 `GET_STATUS.tx_dropped` **恒为 0**
+> （`proto_task.c:162-164`，注释也写明了原因：`link_write` 是**直写阻塞**的，
+> 没有发送队列，所以"丢片"这个动作根本不存在）。也就是说：
+> **它是"没被统计过"，不是"没有丢过"** —— 别拿它当链路健康的证据。
+> 规则 5「设备端绝不能阻塞」在直写实现下也没有被真正满足（主循环会等 TX 完成）。
+
 ### 6.6 时序对齐
 
 - 每片携带 `capture_id` + `start_sample` + 采集起点 `tick_us`
 - 主机时间轴 = `start_sample / actual_rate_hz`
 - 屏幕对齐用 `trigger_index`（触发点画在预置位置）
 - 主机用 `PING` 维护设备时钟偏移：`offset = host_now − (t0 + RTT/2)`，连接时与周期性更新
+  > ⚠ **实现状态（2026-10-10）**：**这条两端都没实现** —— 设备不回 `tick_us`（§5.1 状态块），
+  > 主机的 `CommandBus::ping` 也只返回 `(回显内容, RTT)`、不计算偏移。
+  > 当前所有时间信息都来自 `device_tick_us`（`EVENT_TRIGGER` 携带）与 `start_sample`，
+  > 不是靠这个偏移。见文末 §11。
 - **分片到达抖动不影响时间轴**（时间来自样点号，不是到达时刻）
 - `tick_us` 是 1 MHz 32 位（约 71.6 分钟回绕，规格写明）
 
@@ -453,7 +549,7 @@ aa 55           SYNC
 | 帧编解码 | 最短帧（LEN=0）、最长帧（LEN=2060，真实满载分片）、各 FLAGS 组合 |
 | 粘包/拆包 | 一次喂 3.5 帧、半个帧、`AA 55` 出现在 payload 内部 |
 | 重同步 | 垃圾字节前缀、CRC 错帧后紧跟正确帧 |
-| 边界值 | `LEN = 0 / 1 / 512 / 2060 / 2061`（越界）|
+| 边界值 | `LEN = 0 / 1 / 512 / 2060`（合法边界，见上方 `frames` 表）；**越界**用解析器的重同步用例 `oversized_len_resync`（`LEN = 4096`）—— 向量表里**没有 2061 这一条**，本行此前写错了 |
 | 数值编码 | i16 负数、u32 最大值、定点缩放字段 |
 | 帧解析 | 未知 CMD 按 LEN 吞帧 |
 | 触发语义 | 状态机各状态下的命令合法性矩阵 |
@@ -467,6 +563,66 @@ aa 55           SYNC
 - 设备对主版本不符**拒绝非基础命令但仍答 `GET_INFO` / `PING`**
 - 每次协议变更必须同时更新四处（见文首），并由两端跑同一份向量做门禁
 - **CI 门禁**：C 原生向量测试 + `cargo test` + 模拟器回归，三件套全绿才允许合并
+
+---
+
+## 11. 实现状态（2026-10-10 实测）
+
+> 这一节记录**契约与实现的差距**。CI 的黄金向量保证的是「两端编解码一致」，
+> **不保证「设备实现了这条命令」** —— 本清单补的就是那个缺口。
+> 每条都注明出处行号，改代码或改契约时请同步改这里。
+
+### 11.1 契约里写着、设备侧没做的
+
+| 条目 | 契约位置 | 设备侧实测 |
+|---|---|---|
+| 非幂等命令的单槽响应缓存（同 seq 1 s 内回放） | §4 | ❌ **未实现**（`proto_task_t` 里没有；目前只有模拟器 `host/crates/sim` 有） |
+| `PING` 附带 `tick_us` | §5.1 | ❌ 设备不回；**主机也不解析**（`command.rs:463-469`） |
+| `RESET` 后软复位 ~50 ms | §5.1 | ❌ 只做 `acq_stop` + `acq_init`（配置回出厂），**不重启 MCU** |
+| 上行 512 B 上限的强制 | §2 | ❌ 未强制：解析器按 2060 判越界，而接收缓冲只有 524 |
+| `FORCE_TRIGGER` | §5.3 | ❌ 恒回 `ERR_UNSUPPORTED` |
+| 流模式 `STREAMING` | §5.3 | ❌ 未实现（`ACQ_MODE_STREAM` 只被存进配置） |
+| `MEASURE` | §5.5 | ❌ 恒回 `ERR_UNSUPPORTED`；主机侧改走本地 `scope_core::measure()` |
+| `MINMAX` / `DELTA` 波形格式 | §6.4 | ❌ 未实现（`READ_BUFFER` 明确拒绝） |
+| `SET_LOG_LEVEL` · `GET_LAST_ERROR` | §5.6 | ❌ 只回空 `Ack`（没有等级、没有错误载荷） |
+| `EVENT_LOG` | §5.6 | ❌ 从不发出 |
+| `MEM_READ` / `MEM_WRITE` | §5.6 | ❌ 未进 `handle_frame`，落 default 回 `UNKNOWN_CMD` |
+| TX 背压丢片计数 `tx_dropped` | §6.5 | ❌ 恒 0（`link_write` 直写阻塞，没有发送队列） |
+| 用 `PING` 维护设备时钟偏移 | §6.6 | ❌ **两端都没实现** |
+
+### 11.2 能力位过度声明（`GET_INFO.caps`）
+
+| 位 | 声明 | 实际 | 出处 |
+|---|---|---|---|
+| `CAP_TRIG_SOFT` | 支持软触发 | `FORCE_TRIGGER` 恒 `ERR_UNSUPPORTED` | `proto_task.c:27-28` vs `:274-279` |
+| `CAP_FMT_MINMAX` | 支持 MINMAX 格式 | `READ_BUFFER` 对 MINMAX 回 `ERR_UNSUPPORTED` | `proto_task.c:27-28` vs `:297-303` |
+
+> 两处都违反了 `proto_task.c:19-26` 自己立下的规矩（「不要在这里声明做不到的能力」，
+> 那里针对的是 `CAP_CH_DUAL` / `CAP_COUPLING_AC`）。
+> **修法二选一**：真的实现它，或把位从 `DEV_CAPS` 摘掉。别留着 ——
+> 主机与 Agent 会**照着 `caps` 规划动作**，声明了做不到的能力等于给它们设陷阱。
+
+### 11.3 契约没写清、而实现已经依赖的
+
+- **`GET_CONFIG` 的 17 字节布局**：协议里没有 `config_resp_t` 结构体，设备是手拼的，
+  主机按同样偏移读。布局已补进 §5.2；**它不进 `protocol.h`、也没有 `static_assert` 保护**，
+  改字段时两边都要手改。
+- **`READ_BUFFER` 的越界语义**：`start_sample` 越界回**空分片 + `LAST`**（不是错误），
+  `end` 超出窗口则截断；"对未冻结的采集区"回的是 `NO_DATA` 而**不是 `BUSY`**。
+  §5.4 原先写的「越界 → `BAD_PARAM`；未冻结 → `BUSY`」与实现不符，已改。
+- **`GET_STATUS.err_flags` 的位定义**：契约页没定义，实现只用了 bit0（本次采集发生过溢出，
+  `proto_task.c:148-149`）。**建议在 §5.1 补上位定义**。
+- **`ECHO` 的 512 B 上限**：靠接收缓冲隐式限制，不是显式校验。
+
+### 11.4 主机侧（host）的对应缺口
+
+- `PING` 的 `tick_us` 不解析（见 §5.1 / §6.6）。
+- MCP 的 `scope_measure` 只出口 **AC-RMS**（`ac_rms_v`，`session.rs:879`）；
+  `Measurements` 里的真 RMS **没有任何出口**（不存在 `rms_v` 字段）。
+  文案若承诺"RMS"，必须指明是哪一个 —— 两者对带直流偏置的信号差别很大。
+
+> **契约与实现的关系**：以上都是"实现落后于契约"，**没有一条是契约写错了**。
+> 所以这一轮修的是文档（把差距写明），不是把契约改软。
 
 ---
 

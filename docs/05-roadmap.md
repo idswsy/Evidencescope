@@ -33,15 +33,15 @@ cd host && cargo test       # Rust 端全部测试
 
 > **目标：F103 采到 2048 点 → 串口 → CLI 落 CSV → 能画出来。**
 
-| 交付物 | 位置 | 验收标准 |
-|---|---|---|
-| 时钟树 + ADC/DMA 采集 | `firmware/Hardware/adc_dma.c` | TIM4_CC4 → ADC1 → DMA1Ch1，857.143 kSPS 实测（用 `actual_hz` 校验） |
-| 串口链路 + 帧解析 | `firmware/App/proto_task.c` | `PING` / `ECHO` / `GET_INFO` 在真机上通过 |
-| 主机传输层 | `host/crates/transport-serial/` | 能枚举串口、连接、超时重试 |
-| CLI | `host/crates/cli/` | `scope-cli capture -o wave.csv` 能出图 |
-| 标定表 | `host/crates/core/src/calib.rs` | 用已知直流电压反推 LSB/V，写进配置文件 —— **主机侧已完成**（见下表）；**真值待上板实测** |
+| 交付物 | 位置 | 验收标准 | 状态 |
+|---|---|---|---|
+| 时钟树 + ADC/DMA 采集 | `firmware/Hardware/src/adc_dma.c` | TIM4_CC4 → ADC1 → DMA1Ch1，857.143 kSPS 实测（用 `actual_hz` 校验） | ✅ 已实现，**真机未验** |
+| 串口链路 + 帧解析 | `firmware/App/proto_task.c` | `PING` / `ECHO` / `GET_INFO` 在真机上通过 | ✅ 已实现，**真机未验** |
+| 主机传输层 | `host/crates/transport-serial/` | 能枚举串口、连接、超时重试 | ✅ |
+| CLI | `host/crates/cli/` | `scope-cli capture -o wave.csv` 能出图 | ✅ |
+| 标定表 | `host/crates/core/src/calib.rs` | 用已知直流电压反推 LSB/V，写进配置文件 —— **主机侧已完成**（见下表）；**真值待上板实测** | ⏳ 待实板 |
 
-**已经先做掉的一部分**（不需要板子）：
+**已经做掉的部分**（不需要板子，或已在本机完成）：
 
 | 交付物 | 位置 | 状态 |
 |---|---|---|
@@ -49,6 +49,11 @@ cd host && cargo test       # Rust 端全部测试
 | 触发搜索 | `firmware/App/trigger.c` | ✅ 施密特迟滞状态机，**状态跨块保留**；`tests/test_trigger.c` 覆盖四个边界用例 |
 | 采集状态机 | `firmware/App/acq.c` | ✅ ARM → 搜触发（可跨块）→ 收尾 → DONE；含 auto 超时与溢出检测 |
 | 命令分发 | `firmware/App/proto_task.c` | ✅ 17 条命令；往返测试走完整的编解码（不是直接调处理函数） |
+| 屏幕帧算术 | `firmware/App/waveform.c` | ✅ 采集窗 → 100 列上下沿 / Vpp / 频率（纯算术，PC 上可测） |
+| 本机输入与测频 | `firmware/App/local_input.c` · `local_policy.c` · `freq_meter.c` | ✅ 编码器/按键/测频，均为纯逻辑 |
+| 硬件层 | `firmware/Hardware/src/`（10 个源文件 + 11 个头） | ✅ ADC/DMA 采集环、USART 链路、hal 装配、TFT、本机 IO/测频/函数发生器 |
+| Keil 工程 | `firmware/MDK-ARM/synthesize-project.uvprojx` | ✅ 可编译（ARMCC V5.06 update 5，**0 Error / 0 Warning**，Flash 19.02 KB / RAM 18.46 KB） |
+| PC 端测试 | `firmware/run_tests.sh` | ✅ 7 个测试程序 / **249 项断言** |
 | **标定表** | `host/crates/core/src/calib.rs` | ✅ 按设备 `uid` 索引；CLI 写入（`scope-cli cal set`），GUI / MCP 只读。**四个前端全部接上**，未标定时三端都如实标出。⚠ 真值仍需上板实测 —— 见 `docs/02-hardware.md` §9 |
 
 跑法：`./firmware/run_tests.sh` —— **不需要板子、不需要 Keil、不需要交叉编译**，
@@ -66,8 +71,8 @@ CI 里也跑它。这正是那条分层的意义：三个人里两个人不拿�
 
 | 交付物 | 位置 | 验收标准 |
 |---|---|---|
-| TIM 输入捕获 | `firmware/Hardware/tim_capture.c` | 13.9 ns 边沿时间戳，捕获缓冲区 |
-| I2C 解码器（C） | `firmware/App/i2c_decode.c` | START/重复START/地址/ACK/NACK/数据/STOP |
+| TIM 输入捕获 | `firmware/Hardware/src/tim_capture.c`（⚠ **尚未创建**；现有的 `local_freq.c` 只是测频，不做边沿时间戳缓冲） | 13.9 ns 边沿时间戳，捕获缓冲区 |
+| I2C 解码器（C） | `firmware/App/i2c_decode.c`（⚠ **尚未创建**） | START/重复START/地址/ACK/NACK/数据/STOP |
 | I2C 解码器（Rust） | `host/crates/core/src/i2c_decode.rs` | 与 C 端同一批测试向量（`i2c_vectors.json`）结果一致 |
 | 泳道渲染 | `host/crates/cli` 或 GUI | SCL/SDA 双泳道 + 阈值判定 + 去抖，「共 N 帧」统计 |
 | 双通路时间对齐 | | ADC 波形与数字边沿在同一时间轴对齐（误差 < 1 µs） |

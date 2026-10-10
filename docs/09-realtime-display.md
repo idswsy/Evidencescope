@@ -65,6 +65,10 @@ PACK12 为每样点 1.5 B（2 样点 → 3 B），**载荷减少 25%**。编解�
 - 回归：`firmware/tests/test_proto_task.c` 的 PACK12 往返组（与 `acq_sample` 逐点相等）+ 主机端 `decode_chunk_samples` 单测 + scope-mcp 的「按回显格式解码」端到端测试。
 
 > **遗留缺陷（不在本次范围）**：`DEV_CAPS` 仍宣称 `CAP_FMT_MINMAX`，而 `cmd_read_buffer` 对 MINMAX 回 `ERR_UNSUPPORTED`。`App/proto_task.c` 上方数行恰有一段注释要求「不要声明做不到的能力」（针对 `CAP_CH_DUAL` / `CAP_COUPLING_AC`）——**此处仍未守住自己定的纪律**，须另行修复。
+>
+> **2026-10-10 复核补充**：同类缺陷**还有一处** —— `DEV_CAPS` 同时宣称 `CAP_TRIG_SOFT`，
+> 而 `cmd_force_trigger` 恒回 `ERR_UNSUPPORTED`（"soft trigger not wired yet"）。
+> 两条一起列进 `docs/03-protocol.md` §11 的实现状态清单。
 
 ---
 

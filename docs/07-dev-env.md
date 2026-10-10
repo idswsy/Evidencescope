@@ -13,7 +13,7 @@
 | **Rust** (rustup) | stable | 上位机 | 上位机 + Agent |
 | **Python** | ≥ 3.8 | 生成黄金测试向量 | 全员（跑测试要用） |
 | **C 编译器** (gcc) | C11 | 协议层测试（`./proto/run_tests.sh`） | **全员** —— 见下方说明 |
-| **Keil MDK** | ≥ 5.36 + AC6 | 固件编译 | 固件 |
+| **Keil MDK** | 5.x + **ARMCC5**（工程实测 `V5.06 update 5`；AC6 未验证） | 固件编译 | 固件 |
 | **DAP-Link** | — | 烧录 | 固件 |
 
 > **Python 与 gcc 都不是可选项。** `proto/tests/vectors.json` 由 `gen_vectors.py`
@@ -68,7 +68,7 @@ cd f103-agent-scope
 
 # ── 1. C 端协议测试 ──────────────────────────────────
 ./proto/run_tests.sh
-# 期望：全部通过: 50 项
+# 期望：全部通过: N 项（N 由向量表决定，当前为 50；条数不要写死在别处）
 
 # ── 2. Rust 上位机测试 ───────────────────────────────
 ./host/run.sh test
@@ -76,6 +76,7 @@ cd f103-agent-scope
 #       **不写死条数** —— 这个数字每加一个测试就过期一次，
 #       而且它曾经在 README 和这里各写了一个不同的值（61 / 57）。
 #       判断标准只有一个：所有 test result 都是 ok。
+#       （2026-10-10 实测：不含 GUI 的 workspace 为 302 项，含 GUI 另 84 项 + 5 ignored）
 
 # ── 3. 端到端：对着模拟器抓一次波形 ──────────────────
 ./host/run.sh run -p scope-cli -- sim capture --scenario sine_1k_3v3 -n 1024 -o wave.csv
@@ -115,10 +116,16 @@ cd f103-agent-scope
 
 1. 安装 **Keil MDK-ARM**（社区版即可）
 2. 安装 **STM32F1xx DFP**（Device Family Pack）
-3. 打开 `firmware/MDK-ARM/<工程名>.uvprojx`
-   > ⚠️ **工程文件尚未创建**（`firmware/MDK-ARM/` 现在是空目录，`.uvprojx` 是 **P1 任务**）。
-   > 在那之前，固件侧的协议逻辑可以先用 PC 上的 gcc 编译测试 —— 直接跑
-   > `./proto/run_tests.sh` 就行：它会自己生成向量头、决定编译参数、跑完报数。
+3. 打开 `firmware/MDK-ARM/synthesize-project.uvprojx`（**工程已存在**：`App/` +
+   `Hardware/` + `Core/` + `proto/protocol.c` 都在里面；最后一次完整重建用的是
+   ARMCC `V5.06 update 5`，**0 Error / 0 Warning**）
+   > ⚠️ **不要用 `firmware/synthesize-project.ioc` 让 CubeMX 重新生成代码**：它的外设
+   > 清单只有 ADC1 / DMA / NVIC / RCC / SPI1 / SYS / TIM2 / TIM3，**既没有 TIM4
+   > （ADC 的外部触发）也没有 USART1（协议链路）** —— 重新生成会把这两条链路一起删掉。
+   > `Core/Src/tim.c` 的 `MX_TIM4_Init()` 与 `Core/Src/usart.c` 的 `MX_USART1_UART_Init()`
+   > 才是当前工程的真实配置。
+   > 不想开 Keil 也可以只跑协议逻辑：固件侧那份在 PC 上用 gcc 就能编 —— 直接跑
+   > `./proto/run_tests.sh`：它会自己生成向量头、决定编译参数、跑完报数。
 
 想手工编的话**必须带上生成目录** —— `vectors.h` 是生成物，不在 `proto/` 下：
 

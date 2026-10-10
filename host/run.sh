@@ -6,8 +6,8 @@
 # `ld.exe` 打不开带 CJK 的路径，链接阶段会报一堆
 # "cannot find ...rcgu.o: No such file or directory"。
 #
-# 当前 checkout 是纯 ASCII（.../Desktop/I2C/F103），不会触发；但把仓库
-# 放到任何中文目录下就会，所以这套探测与绕行保留。
+# 当前 checkout **就是**非 ASCII 路径（D:\比赛\I2C\F103），这段探测会触发；
+# 仓库被放到任何中文目录下同样会触发，所以这套探测与绕行必须留着。
 #
 # 对策：路径含非 ASCII 字符时，自动把 target 目录指到一个纯 ASCII 的位置。
 # Linux/macOS/纯 ASCII 路径下完全无副作用。

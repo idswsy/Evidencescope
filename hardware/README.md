@@ -11,7 +11,8 @@
 
 - 项目页：<https://oshwhub.com/course-examples/yi-qi-yi-biao-jian-yi-shu-zi-shi-bo-qi-she-ji-cha-jian-ban>
 - 工程 UUID：`5e03b6545745463bb8b64813209ffb8c`
-- 许可：**GPL-3.0**（硬件）/ 参考代码 **MulanPSL-2.0**
+- 许可：**GPL-3.0**（硬件）；参考代码**只有**文件头标注 MulanPSL-2.0，本仓库**无法核实**
+  （工作副本里没有 LICENSE，仓库地址与作者也无从考证）—— 见 [NOTICE.md](../NOTICE.md) §2
 - 页面明文**禁止商业性使用**
 
 ### ⚠️ 没有可直接下载的原理图/Gerber
@@ -128,7 +129,7 @@
 |---|---|
 | 上游硬件工程 | <https://oshwhub.com/course-examples/yi-qi-yi-biao-jian-yi-shu-zi-shi-bo-qi-she-ji-cha-jian-ban> |
 | 上游开发 wiki（16 节教程） | <https://wiki.lceda.cn/zh-hans/course-projects/microcontroller/32-simple-oscilloscope/introduce.html> |
-| 上游参考代码 | <https://gitee.com/chen11232/GD32E230-Oscilloscope> |
+| 上游参考代码 | 外部提供的 `STM32-Oscilloscope` 工作副本（**无仓库地址、无 LICENSE**，许可待确认）—— 见 [NOTICE.md](../NOTICE.md) §2 |
 | 上一块核心板资料（留档） | <https://wiki.lckfb.com/zh-hans/dkx-stm32f103c8t6/> |
 
 ### B 站视频教程（上游，16 集）

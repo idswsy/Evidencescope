@@ -1,7 +1,9 @@
 # firmware/ —— STM32F103C8T6 固件
 
-> **当前状态**：`App/` 层的**硬件无关部分已经开始实现**，并且**在 PC 上跑得起来**。
-> `Hardware/` 与 `MDK-ARM/` 仍然为空 —— 那两半没有板子做不了。
+> **当前状态（2026-10-10 实测）**：`App/` 与 `Hardware/` **两层都已实现**，
+> **Keil 工程可编译并链接通过**（ARMCC `V5.06 update 5`，**0 Error / 0 Warning**，
+> Flash 19.02 KB / 64 KB、RAM 18.46 KB / 20 KB）。
+> 剩下的不是"没写"，而是**没上板**：真机采集、2 Mbps 链路与 I2C 数字通路都还没在实板上验证。
 >
 > ```bash
 > ./firmware/run_tests.sh      # 不需要板子、不需要 Keil、不需要交叉编译
@@ -12,11 +14,17 @@
 > | `App/hal.h` | ✅ App 层看到的硬件接口（纯函数指针，无寄存器） |
 > | `App/trigger.c` | ✅ 触发搜索（施密特迟滞状态机，**状态跨块保留**） |
 > | `App/acq.c` | ✅ 采集状态机（ARM → 搜触发 → 收尾 → DONE） |
-| `App/proto_task.c` | ✅ 命令分发（收字节 → 解析 → 执行 → 应答），17 条命令 |
-> | `App/measure.c` | ⏳ 待实现 |
-> | `App/i2c_decode.c` | ⏳ 待实现（数字通路，且本板只有一路比较器，见 ADR-010） |
-> > | `App/ui.c` | ⏳ 待实现 |
-> | `Hardware/*` | ❌ 需要板子 |
+> | `App/proto_task.c` | ✅ 命令分发（收字节 → 解析 → 执行 → 应答），17 条命令 |
+> | `App/waveform.c` | ✅ 采集窗 → 100 列上下沿 / Vpp / 频率（纯算术，PC 上可测） |
+> | `App/freq_meter.c` | ✅ 测频的纯算术部分（TIM3 捕获 → Hz） |
+> | `App/local_input.c` | ✅ 编码器正交解码 + 按键消抖 + 事件队列 |
+> | `App/local_policy.c` | ✅ 按键/编码器事件 → 动作（纯策略） |
+> | `App/measure.c` | ⏳ 未实现（设备侧 `MEASURE` 回 `ERR_UNSUPPORTED`） |
+> | `App/i2c_decode.c` | ⏳ 未实现（数字通路，且本板只有一路比较器，见 ADR-010） |
+> | `App/ui.c` | ⏳ 未实现（屏幕渲染在 `Hardware/src/display.c`，现已冻结） |
+> | `Hardware/**` | ✅ 21 个文件已实现（ADC/DMA 采集环、USART 链路、hal 装配、TFT、本机 IO/测频/函数发生器） |
+> | `tests/` | ✅ 7 个测试程序 / **249 项断言**，PC 上跑 |
+> | `MDK-ARM/` | ✅ `synthesize-project.uvprojx` + 构建产物（`.axf` / `.hex` / `.map`） |
 >
 > 这一半能先做出来，靠的正是下面那条纪律 —— **`App/` 不碰 HAL，
 > 于是三个人里两个人不拿板子也能干活**。
@@ -31,21 +39,28 @@
 firmware/
 ├─ App/             应用层 —— 与硬件无关的逻辑，可在 PC 上单测
 │   ├─ hal.h              App 看到的硬件（纯函数指针 —— 这条纪律的落点）
-│   ├─ proto_task.c       帧解析状态机 → 命令分发 → 响应编码
+│   ├─ proto_task.c       帧解析状态机 → 命令分发 → 响应编码（17 条命令）
 │   ├─ acq.c              采集状态机 IDLE/ARMED/DONE/STREAMING/FAULT
 │   ├─ trigger.c          触发搜索（迟滞状态机）
-│   ├─ measure.c          定点测量（Vpp/频率/占空比/RMS）
-│   ├─ i2c_decode.c       数字通路 I2C 解码器
-│   └─ ui.c               屏幕 / 编码器 / 按键
+│   ├─ waveform.c         采集窗 → 屏幕一帧（100 列上下沿 / Vpp / 频率）
+│   ├─ freq_meter.c       测频纯算术（TIM3 捕获 → Hz）
+│   ├─ local_input.c      编码器/按键输入（消抖 + 正交解码 + 事件队列）
+│   ├─ local_policy.c     本机输入 → 动作的纯策略
+│   ├─ measure.c          ⏳ 未实现（定点测量）
+│   ├─ i2c_decode.c       ⏳ 未实现（数字通路 I2C 解码器）
+│   └─ ui.c               ⏳ 未实现（屏幕 / 编码器 / 按键）
 ├─ tests/           PC 上的单元测试（与 App/ 一起编译，见 run_tests.sh）
 ├─ run_tests.sh     PC 上编译并运行测试 —— **CI 会跑它**
 │
 ├─ Hardware/        硬件层 —— 唯一允许碰寄存器的地方
-│   ├─ inc/  src/         上游的 ST7735S 显示驱动（tft.c / tft_init.c / font.h）
-│   ├─ adc_dma.c          ⏳ 待写：TIM4_CC4 → ADC1 → DMA1Ch1 → 8KB 环
-│   ├─ link_uart.c        ⏳ 待写：USART1 + 外接 CH340
-│   ├─ hal_impl.c         ⏳ 待写：把 9 个函数指针填进 `hal_t`
-│   └─ scope_ui.c         上游的本机显示/按键/测频逻辑，`#if SCOPE_LOCAL_UI`（默认 0）
+│   ├─ inc/ (11)  src/ (10)   ✅ 已实现，不是空的
+│   ├─ src/adc_dma.c      ✅ TIM4_CC4 → ADC1 → DMA1Ch1 → 8 KB 环
+│   ├─ src/link_uart.c    ✅ USART1 + 外接 CH340（1 KB RX / 2 KB TX 环）
+│   ├─ src/hal_impl.c     ✅ 把 9 个函数指针填进 `hal_t`
+│   ├─ src/display.c      ⏸ 被动帧渲染（**已冻结**，不在 Keil 工程里，见 docs/09 §4.4）
+│   ├─ src/tft*.c         ✅ 上游 ST7735S 驱动
+│   ├─ src/local_*.c      ✅ 本机 IO / 测频 / 函数发生器
+│   └─ src/scope_ui.c     上游的本机显示/按键/测频逻辑，`#if SCOPE_LOCAL_UI`（默认 0，存档）
 │
 ├─ Core/            CubeMX 生成的时钟树与外设初始化（Inc/ + Src/）
 ├─ Drivers/         ST HAL + CMSIS（厂商代码，许可见 `NOTICE.md` §6）
@@ -172,11 +187,18 @@ grep -rn '#include.*\(stm32\|hal_\|gd32\|HAL\)' firmware/App/ && exit 1 || exit 
 | USB CDC | ✅ 官方例程 | 需移植 |
 | **本项目 64 KB Flash 下的余量** | ⚠️ **紧张** | ✅ 宽松 |
 
-> **C8 只有 64 KB Flash。HAL + USB CDC 就要吃掉 20–35 KB。**
-> 建议：**优先 LL 库（HAL 的轻量版）或 SPL**；若坚持用 HAL，
-> 要么换 **F103CB（128 KB Flash，引脚完全兼容）**，要么严格控制功能规模。
+> **实测结论（2026-10-10 核对 `MDK-ARM/synthesize-project/*.build_log.htm` 与 `.map`）**：
+> 本工程用的就是 **HAL**，而上面"20–35 KB"的担心**没有兑现** ——
+> Flash 实际占用 `Code 19028 + RO-data 396 + RW-data 56 = 19480 B`（**19.02 KB / 64 KB，30%**）。
+> **真正紧的是 RAM**：`RW-data 56 + ZI-data 18848 = 18904 B`（**18.46 KB / 20 KB**），
+> 只剩约 **1.5 KB** 余量（栈 1 KB + 堆 0.5 KB 都已算在 ZI 里）。
 >
-> 换 CB 是更省事的路 —— 它是同封装同引脚的，底板不用动。
+> 所以：**不必为 Flash 换 F103CB**；加功能前先看 `.map` 的 `Total RW Size`。
+> 另外上面那次构建还**含 `display.c`**（屏幕冻结之前做的）—— 冻结后按 docs/09 §4.4
+> 的实测数字可再省约 448 B RAM。
+>
+> 当前链路是 USART1 + 外接 CH340，**没有 USB CDC**，所以 HAL 的体积里还没算上它；
+> 将来真上 USB CDC 要重新核一遍 Flash/RAM。
 > 见 [`docs/04-performance.md`](../docs/04-performance.md) §3。
 
 ---
@@ -308,17 +330,27 @@ TIM4 (PSC=0, ARR=83, CCR4=83) ──CC4───► ADC1（P1 单 ADC）
 
 ## 编译与烧录
 
-> **工程文件还没有。** `firmware/MDK-ARM/` 目前是空目录 ——
-> Keil 工程（`.uvprojx`）要在 **P1 阶段**创建。
-> 在那之前，`App/` 与 `Hardware/` 的代码可以先用 PC 上的 gcc 编译测试（见上面的分层纪律）。
+> **工程已经建好。** `firmware/MDK-ARM/synthesize-project.uvprojx`
+> 已包含 `App/`（7 个 .c）、`Hardware/src/`（8 个 .c，不含已冻结的 `display.c` 与存档的
+> `scope_ui.c`）、`Core/Src/`、`Drivers/` 与 `proto/protocol.c`。
+> 最后一次完整重建：ARMCC `V5.06 update 5`，**0 Error / 0 Warning**，
+> 产物在 `firmware/MDK-ARM/synthesize-project/`（`.axf` / `.hex` / `.map`）。
+>
+> ⚠ 那份产物是**屏幕冻结之前**的构建 —— `synthesize-project.lnp` 里仍有 `display.o`。
+> 重新编译一次即与当前工程一致（并省下约 448 B RAM）。
 
 ```bash
-# P1 建好工程之后：
-# Keil MDK：打开 firmware/MDK-ARM/<工程名>.uvprojx，F7 编译，DAP-Link 下载
+# Keil MDK：打开 firmware/MDK-ARM/synthesize-project.uvprojx，F7 编译，DAP-Link 下载
 
-# 命令行（若另建 Makefile + arm-none-eabi-gcc）
-make -C firmware && make -C firmware flash
+# 命令行：本仓**没有** firmware 的 Makefile（`make -C firmware` 不成立），
+# 要走命令行得自建 arm-none-eabi-gcc 构建脚本。
 ```
+
+> ⚠ **不要拿 `firmware/synthesize-project.ioc` 让 CubeMX 重新生成代码** ——
+> 它的外设清单里**没有 TIM4、也没有 USART1**（只有 ADC1/DMA/NVIC/RCC/SPI1/SYS/TIM2/TIM3），
+> 而 `Core/Src/tim.c` 的 `MX_TIM4_Init()`（ADC 外部触发）与 `Core/Src/usart.c` 的
+> `MX_USART1_UART_Init()`（协议链路）才是当前工程的真实配置。
+> 重新生成会把这两条链路按 `.ioc` 的清单一起删掉。
 
 **DAP-Link 接线**（核心板上的 SWD 四脚）：
 
