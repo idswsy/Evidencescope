@@ -29,7 +29,7 @@ use std::io::Write;
 #[command(
     name = "scope-cli",
     version,
-    about = "F103 Agent Scope 命令行上位机",
+    about = "EvidenceScope 命令行上位机",
     long_about = "可被 AI Agent 控制的数字示波器 / I2C 总线分析仪的调试工具。\n\
                   不带硬件时用 `sim` 子命令，全部功能都可用。"
 )]

@@ -1,6 +1,7 @@
 //! # scope-gui —— 桌面上位机
 //!
-//! 把 `scope-core` 的命令层做成给人用的界面：连接 → 配置 → 采集 → 看波形 → 解码 I2C。
+//! 把 `scope-core` 的命令层做成给人用的界面：
+//! 连接 → 配置 → 采集 → 波形测量与分析 → 总线解码（I2C / UART）。
 //!
 //! 与 CLI / MCP 同级 —— 三者都只依赖 [`scope_core::CommandBus`] 与
 //! [`scope_core::DevicePort`]，不关心背后是真硬件还是模拟器（见 `docs/01-architecture.md`）。
@@ -93,12 +94,12 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([880.0, 560.0])
-            .with_title("F103 Agent Scope"),
+            .with_title("EvidenceScope"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "F103 Agent Scope",
+        "EvidenceScope",
         options,
         Box::new(move |cc| {
             // 字体必须在建 App 之前装好 —— 界面全是中文，缺字体就是满屏方框

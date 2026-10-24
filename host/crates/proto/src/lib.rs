@@ -1,4 +1,4 @@
-//! # scope-proto —— F103 Agent Scope 线协议（Rust 端）
+//! # scope-proto —— EvidenceScope 线协议（Rust 端）
 //!
 //! 本 crate 是 [`docs/03-protocol.md`] 的 Rust 实现，与 C 端
 //! `proto/protocol.{h,c}` **逐字节等价**。

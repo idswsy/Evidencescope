@@ -50,7 +50,8 @@ pub(crate) fn calib_badge(view: &ScaleSet) -> (bool, String, String) {
 /// 顶部工具条：采集 / 停止 / 复位。
 pub fn toolbar(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.strong("F103 Agent Scope");
+        ui.strong("EvidenceScope");
+        ui.weak("F103 双通路示波器");
         ui.separator();
 
         let busy = app.is_busy();
@@ -1079,16 +1080,6 @@ pub fn detail_panel(app: &mut App, ui: &mut egui::Ui) {
     decode_panel(app, ui);
 }
 
-/// 把判决缩成界面能放下一行的小串。
-fn verdict_short(v: &scope_core::Verdict) -> String {
-    match v {
-        scope_core::Verdict::Ok { u } => format!("±{u:.3}"),
-        scope_core::Verdict::Bounded { lower } => format!("≥{lower:.1}"),
-        scope_core::Verdict::BoundedAbove { upper } => format!("≤{upper:.1}"),
-        scope_core::Verdict::Refused { reason } => format!("拒答:{reason:?}"),
-    }
-}
-
 /// 测量结果 —— 每个通道一行。
 fn measure_section(app: &mut App, ui: &mut egui::Ui) {
     let Some(cap) = app.capture.clone() else {
@@ -1198,7 +1189,9 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
             high,
             m.edges
         ));
-        // 第三行：可信度。与 MCP 的 quality 是同一份对象，不另算。
+        // 第三行：质量参数 + 判决。判决文本与证据包/CLI 是同一份
+        // （core::analysis::verdict_line），界面不另写第二套措辞 ——
+        // 与 F2 在 CLI 的做法一致。
         let noise = ca
             .quality
             .noise_lsb
@@ -1209,15 +1202,10 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
             .hysteresis_lsb
             .map(|v| format!("{v:.1}"))
             .unwrap_or_else(|| "—".into());
-        let freq_verdict = ca
-            .quality
-            .verdicts
-            .get("freq_hz")
-            .map(verdict_short)
-            .unwrap_or_else(|| "—".into());
-        ui.weak(format!(
-            "      可信度：σ̂={noise} LSB  迟滞={h} LSB  频率={freq_verdict}"
-        ));
+        ui.weak(format!("      σ̂={noise} LSB  迟滞={h} LSB"));
+        if let Some(v) = scope_core::analysis::verdict_line(&ca.quality) {
+            ui.weak(format!("      {v}"));
+        }
     }
     // 这几个边界必须写出来，否则数字会被过度解读：
     // 「有效值」是扣除直流后的 RMS（交流信号看这个）；频率/占空比排除了
@@ -1233,6 +1221,18 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
          · 频率与占空比已排除事务间空闲 · 上升/下降时间分辨率下限 1 个采样周期（{dt_ns:.0} ns）\
          · 过冲参考电平为平台均值 · 非周期信号（数据线）的「频率」只是边沿速率，参考意义有限"
     ));
+
+    // 瞬态与 TIE —— 与证据包同一渲染（analysis::transient_tie_lines），单一来源；
+    // 「测不出」与判决纪律（无模型即拒答）由此原样进入界面。
+    ui.add_space(2.0);
+    ui.strong("瞬态与 TIE");
+    for ch in 0..cap.channels.len() {
+        if let Some(ca) = report.channel(ch) {
+            for line in scope_core::analysis::transient_tie_lines(ca) {
+                ui.monospace(format!("CH{:<2} {}", ch + 1, line));
+            }
+        }
+    }
 }
 
 /// 生成导出路径：`<当前目录>/captures/<时间>_<id>.<后缀>`。

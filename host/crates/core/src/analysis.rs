@@ -661,7 +661,9 @@ pub fn quantity_label(key: &str) -> Option<(&'static str, &'static str)> {
 ///
 /// 输出按「判决类别」分组，而不是逐量罗列：31 个字段逐个写成
 /// `Vpp=拒答(未标定)` 会占掉半屏，且同类原因重复到无法阅读。
-fn verdict_line(q: &Quality) -> Option<String> {
+/// 把一个通道的判决表渲染成一行文本 —— 证据包、CLI 与 GUI 共用的**唯一来源**
+/// （调用方各加自己的缩进/前缀，但措辞只有这一份）。
+pub fn verdict_line(q: &Quality) -> Option<String> {
     if q.verdicts.is_empty() {
         return None;
     }
