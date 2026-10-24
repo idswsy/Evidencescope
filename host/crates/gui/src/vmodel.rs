@@ -16,8 +16,11 @@
 
 use scope_core::i2c_decode::{EventKind, I2cDecode, I2cWarning};
 
-// 测量算法在 core 里 —— GUI 与 MCP 共用一份
-pub use scope_core::measure::measure;
+// 测量算法在 core 里 —— GUI 与 MCP 共用一份。
+// 只有测试用到它（界面走 `AnalysisReport`），故按测试导入，避免
+// 非测试构建里的 unused-import 警告。
+#[cfg(test)]
+use scope_core::measure::measure;
 use scope_core::{Capture, ChannelScale};
 
 /// 一段带标注的时间区间，画在数字泳道上。
