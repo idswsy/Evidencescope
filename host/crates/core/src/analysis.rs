@@ -762,6 +762,73 @@ fn opt_ns(v: Option<f64>) -> String {
     }
 }
 
+/// 瞬态与 TIE 两段的文本。**证据包与 CLI 共用这一份**，避免两处措辞漂移。
+///
+/// 返回的每一行**不带外层缩进**：首行以「瞬态:」「TIE:」开始，续行以
+/// 6 个空格对齐到首行内容之后。调用方给每行加同样的前缀即可。
+pub fn transient_tie_lines(ca: &ChannelAnalysis) -> Vec<String> {
+    let tr = &ca.transient;
+    // 上界用「≤」而不是「=≤」：只有上界时读作「振铃≤…」，与可信度行的
+    // 「振铃频率上界≤…」同一口径。
+    let ring = match (tr.ring_freq_hz, tr.ring_freq_upper_hz) {
+        (Some(f), _) => format!("={f:.1} Hz"),
+        (None, Some(u)) => format!("≤{u:.1} Hz"),
+        (None, None) => "=测不出".to_string(),
+    };
+    let zeta = match tr.damping_ratio {
+        Some(z) => format!("{z:.3}"),
+        None => "测不出".to_string(),
+    };
+    let slew = match (tr.slew_max_lsb_per_us, tr.slew_avg_lsb_per_us) {
+        (Some(a), Some(b)) => format!("{a:.1}/{b:.1} LSB/µs"),
+        _ => "测不出".to_string(),
+    };
+    let runts = match tr.runts {
+        Some(n) => n.to_string(),
+        None => "测不出".to_string(),
+    };
+
+    let mut lines = vec![
+        format!(
+            "瞬态: 振铃{ring}  阻尼比={zeta}  调节(±2%)={}  调节(±5%)={}",
+            opt_ns(tr.settle_2_ns),
+            opt_ns(tr.settle_5_ns)
+        ),
+        format!(
+            "      RC τ={}  压摆(max/avg)={slew}  runt={runts}",
+            opt_ns(tr.rc_tau_ns)
+        ),
+    ];
+
+    match &ca.tie {
+        Some(t) => {
+            let grid = if t.grid_limited { "是" } else { "否" };
+            lines.push(format!(
+                "TIE: 边沿数={} ρ={:.2} σ={:.1} ns [CI95 {:.1}, {:.1}] 均值={:.1} ns 峰峰={:.1} ns",
+                t.n_edges,
+                t.rho,
+                t.sigma_tie_ns,
+                t.ci95_low_ns,
+                t.ci95_high_ns,
+                t.mean_tie_ns,
+                t.pk_pk_ns
+            ));
+            lines.push(format!(
+                "     周期抖动 RMS={:.1} ns 峰峰={:.1} ns 单沿地板={:.1} ns 网格受限={grid}",
+                t.period_jitter_rms_ns, t.period_jitter_pk_pk_ns, t.resolution_floor_ns
+            ));
+        }
+        None => {
+            let reason = match ca.quality.verdicts.get("tie_sigma_ns") {
+                Some(Verdict::Refused { reason }) => reason.text(),
+                _ => "测不出",
+            };
+            lines.push(format!("TIE: 测不出（{reason}）"));
+        }
+    }
+    lines
+}
+
 /// 通道测量段。放在这里是为了让「怎么解释 Measurements」只有一处。
 pub(crate) fn channels_text(s: &mut String, report: &AnalysisReport, cap: &Capture) {
     use std::fmt::Write as _;
@@ -821,65 +888,8 @@ pub(crate) fn channels_text(s: &mut String, report: &AnalysisReport, cap: &Captu
             m.edges
         );
 
-        let tr = &ca.transient;
-        // 上界用「≤」而不是「=≤」：只有上界时读作「振铃≤…」，与可信度行的
-        // 「振铃频率上界≤…」同一口径。
-        let ring = match (tr.ring_freq_hz, tr.ring_freq_upper_hz) {
-            (Some(f), _) => format!("={f:.1} Hz"),
-            (None, Some(u)) => format!("≤{u:.1} Hz"),
-            (None, None) => "=测不出".to_string(),
-        };
-        let zeta = match tr.damping_ratio {
-            Some(z) => format!("{z:.3}"),
-            None => "测不出".to_string(),
-        };
-        let slew = match (tr.slew_max_lsb_per_us, tr.slew_avg_lsb_per_us) {
-            (Some(a), Some(b)) => format!("{a:.1}/{b:.1} LSB/µs"),
-            _ => "测不出".to_string(),
-        };
-        let runts = match tr.runts {
-            Some(n) => n.to_string(),
-            None => "测不出".to_string(),
-        };
-        let _ = writeln!(
-            s,
-            "     瞬态: 振铃{ring}  阻尼比={zeta}  调节(±2%)={}  调节(±5%)={}",
-            opt_ns(tr.settle_2_ns),
-            opt_ns(tr.settle_5_ns)
-        );
-        let _ = writeln!(
-            s,
-            "           RC τ={}  压摆(max/avg)={slew}  runt={runts}",
-            opt_ns(tr.rc_tau_ns)
-        );
-
-        match &ca.tie {
-            Some(t) => {
-                let grid = if t.grid_limited { "是" } else { "否" };
-                let _ = writeln!(
-                    s,
-                    "     TIE: 边沿数={} ρ={:.2} σ={:.1} ns [CI95 {:.1}, {:.1}] 均值={:.1} ns 峰峰={:.1} ns",
-                    t.n_edges,
-                    t.rho,
-                    t.sigma_tie_ns,
-                    t.ci95_low_ns,
-                    t.ci95_high_ns,
-                    t.mean_tie_ns,
-                    t.pk_pk_ns
-                );
-                let _ = writeln!(
-                    s,
-                    "          周期抖动 RMS={:.1} ns 峰峰={:.1} ns 单沿地板={:.1} ns 网格受限={grid}",
-                    t.period_jitter_rms_ns, t.period_jitter_pk_pk_ns, t.resolution_floor_ns
-                );
-            }
-            None => {
-                let reason = match ca.quality.verdicts.get("tie_sigma_ns") {
-                    Some(Verdict::Refused { reason }) => reason.text(),
-                    _ => "测不出",
-                };
-                let _ = writeln!(s, "     TIE: 测不出（{reason}）");
-            }
+        for line in transient_tie_lines(ca) {
+            let _ = writeln!(s, "     {line}");
         }
 
         if let Some(v) = verdict_line(&ca.quality) {

@@ -559,8 +559,15 @@ fn run_import(
         // 打印出来是「零点 -0」，看起来像个 bug。
         zero_lsb: (0.0 - opts.offset_v) / vpl,
     };
-    let scales = vec![scale; ch_count];
-    print_measurements(&capture, &scales, &targets);
+    let scales = ScaleSet::from_scales(vec![scale; ch_count]);
+    // 导入的数据不是设备采的 —— 明确标成非模拟器，也不能冒充设备链路。
+    print_measurements(
+        &capture,
+        &scales,
+        &targets,
+        &format!("import({path})"),
+        false,
+    );
 
     println!();
     println!(
@@ -570,25 +577,40 @@ fn run_import(
     Ok(())
 }
 
-/// 逐通道打印测量值。`Action::Measure` 与 `import` 共用，免得两处措辞漂移。
-fn print_measurements(capture: &Capture, scales: &[ChannelScale], targets: &[usize]) {
-    println!();
-    println!(
+/// 逐通道测量文本。`Action::Measure` 与 `import` 共用，免得两处措辞漂移。
+///
+/// 瞬态 / TIE 行直接取自 [`scope_core::analysis::transient_tie_lines`]，
+/// 与证据包、MCP 是同一份文本。
+fn measurement_text(
+    capture: &Capture,
+    scales: &ScaleSet,
+    targets: &[usize],
+    link: &str,
+    simulated: bool,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
         "测量  capture_id={}  {} 点  {:.3} ms",
         capture.id,
         capture.len(),
         capture.duration_us() as f64 / 1000.0
     );
 
+    let report = scope_core::AnalysisReport::from_capture(capture, scales, link, simulated);
     for &ch in targets {
-        let scale = scales.get(ch).copied().unwrap_or_default();
         // 「测不出」要写成「测不出」，不能写 0 —— 项目纪律：宁可说不知道
-        let Some(m) = scope_core::measure(capture, ch, &scale) else {
-            println!("  CH{}: 测不出（通道无数据）", ch + 1);
+        let Some(ca) = report.channel(ch) else {
+            let _ = writeln!(out, "  CH{}: 测不出（通道无数据）", ch + 1);
             continue;
         };
-        println!("  CH{}:", ch + 1);
-        println!(
+        let m = &ca.measurements;
+        let _ = writeln!(out, "  CH{}:", ch + 1);
+        let _ = writeln!(
+            out,
             "    Vpp={:.4} V  min={:.4} V  max={:.4} V  mean={:.4} V  AC-RMS={:.4} V  RMS={:.4} V",
             m.vpp, m.min, m.max, m.mean, m.ac_rms, m.rms
         );
@@ -620,12 +642,31 @@ fn print_measurements(capture: &Capture, scales: &[ChannelScale], targets: &[usi
             Some(h) => format!("{h:.1} ns"),
             None => "测不出（没有高电平段）".to_string(),
         };
-        println!("    频率={freq}  占空比={duty}  上升时间={rise}");
-        println!(
+        let _ = writeln!(out, "    频率={freq}  占空比={duty}  上升时间={rise}");
+        let _ = writeln!(
+            out,
             "    下降时间={fall}  过冲/下冲={over}/{under}  高电平脉宽={high}  跃变数={}",
             m.edges
         );
+
+        for line in scope_core::analysis::transient_tie_lines(ca) {
+            let _ = writeln!(out, "    {line}");
+        }
     }
+    out
+}
+
+fn print_measurements(
+    capture: &Capture,
+    scales: &ScaleSet,
+    targets: &[usize],
+    link: &str,
+    simulated: bool,
+) {
+    print!(
+        "{}",
+        measurement_text(capture, scales, targets, link, simulated)
+    );
 }
 
 /// 把 uid 字符串解析成 12 字节，失败时给一条能照着改的错误。
@@ -1065,7 +1106,9 @@ fn run<P: DevicePort>(port: &mut P, action: Action) -> Result<()> {
             // 换算表按设备 uid 查；长度恒等于通道数，`to_csv` 的短表兜底路径不可达。
             let scales: ScaleSet = calib.scales_for(bus.info.as_ref().map(|i| &i.uid), ch_count);
 
-            print_measurements(&capture, scales.as_slice(), &targets);
+            let link = bus.describe();
+            let simulated = bus.is_simulated();
+            print_measurements(&capture, &scales, &targets, &link, simulated);
 
             println!();
             println!("{}", scales.summary_note());
@@ -1379,6 +1422,46 @@ mod tests {
         }
         let e = parse_uid("xyz").unwrap_err().to_string();
         assert!(e.contains("24 个字符"), "错误要写清格式：{e}");
+    }
+
+    /// F2：`sim measure` 与 `import` 必须与证据包用同一套瞬态 / TIE 措辞。
+    ///
+    /// 回归：这两个出口从前只打印基础测量，瞬态与 TIE 只存在于证据包和
+    /// MCP 里 —— 同一份数据在 CLI 上看不见。
+    #[test]
+    fn measurement_text_carries_transient_and_tie_lines() {
+        let cap = sim_capture(Scenario::StepRing, 1024);
+        let text = measurement_text(
+            &cap,
+            &ScaleSet::uncalibrated(1),
+            &[0],
+            "sim(step_ring)",
+            true,
+        );
+        for want in [
+            "瞬态: 振铃=",
+            "阻尼比=",
+            "调节(±2%)=",
+            "RC τ=",
+            "压摆(max/avg)=",
+            "runt=",
+        ] {
+            assert!(text.contains(want), "缺「{want}」：\n{text}");
+        }
+        assert!(
+            text.contains("TIE: 测不出（边沿太少）"),
+            "step_ring 的 TIE 必须写明原因，而不是静默省略：\n{text}"
+        );
+    }
+
+    fn sim_capture(scenario: Scenario, n: usize) -> Capture {
+        let rate = 857_142;
+        let ch_count = scenario.channel_count();
+        let mut gen = scope_sim::WaveformGen::new(scenario, 1);
+        let channels = gen.generate_multi(ch_count, n, rate);
+        let mut cap = Capture::new(1, rate, ch_count, n as u32);
+        cap.channels = channels;
+        cap
     }
 
     /// 钉住 `cal set` 的命令行表面 —— 默认值改错了是**用户可见**的。

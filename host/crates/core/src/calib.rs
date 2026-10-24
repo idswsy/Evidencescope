@@ -117,6 +117,17 @@ impl ScaleSet {
         }
     }
 
+    /// 用调用方给定的逐通道换算表构造。**不算标定记录** ——
+    /// CSV 导入的换算来自文件 / 命令行参数，与设备标定表无关。
+    pub fn from_scales(scales: Vec<ChannelScale>) -> Self {
+        Self {
+            uid: None,
+            calibrated: vec![false; scales.len()],
+            scales,
+            record_found: false,
+        }
+    }
+
     /// 取通道 `ch` 的换算。越界或该通道无记录 → 占位值。
     pub fn get(&self, ch: usize) -> ChannelScale {
         self.scales.get(ch).copied().unwrap_or_default()
