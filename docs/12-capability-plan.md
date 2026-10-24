@@ -115,6 +115,7 @@ pub enum RefuseReason {
 2. **`Measurements` 不改**。它是内部计算类型，字段与 `None` 语义（测不出，不是 0）全部保留；`AnalysisReport` 是对外类型。改动隔离在一层转换函数里。
 3. **不新增「结论文本」层**。文本渲染器只有一处：`analysis::render_text(&AnalysisReport, &EvidenceContext) -> String`。`build_evidence(&EvidenceInput)` **签名不变**，内部改为先组装 `AnalysisReport` 与 `EvidenceContext`（链路、模拟器标记、设备配置、用户问题），再调用 `render_text`。这样 `report.rs` 既有测试、`gui/app.rs` 与 `gui/ai.rs` 的调用点全部零改动。
 4. **`RefuseReason` 不改 `UncertainReason`**。前者是新枚举（11 变体），后者（7 变体）继续服务形状判定；写一个 `From<UncertainReason>` 转换。这样既有 7 处用法与测试不受影响。
+5. **文本出口必须带判决**。每个通道的测量行后追加一行「可信度」，按 `Ok / Bounded / Refused` 分组；`RefuseReason::text()` 是中文措辞的唯一来源。否则模型看到 `频率=207046 Hz` 时无从知道它其实是 `Refused` —— 这正是「同一份结论给人和给模型」不能只在 JSON 出口成立的原因。5 个黄金文本 fixture 钉住这一行。
 
 ### 2.3 serde 形状（对外契约）
 

@@ -175,6 +175,26 @@ pub enum RefuseReason {
     ModelUnverified,
 }
 
+impl RefuseReason {
+    /// 给人读的中文原因。措辞与 MCP 的枚举值分开：那边是机器契约
+    /// （`no_uncertainty_model`），这里是给模型/用户看的句子。
+    pub fn text(self) -> &'static str {
+        match self {
+            RefuseReason::TooFewSamples => "样点太少",
+            RefuseReason::TooSmallAmplitude => "幅度太小",
+            RefuseReason::NoPeriodicity => "无周期",
+            RefuseReason::IntervalUnstable => "间隔不稳",
+            RefuseReason::FrequencyDrift => "频率漂移",
+            RefuseReason::Aliased => "采样密度不足",
+            RefuseReason::ShapeUnrecognized => "形状不在可判范围",
+            RefuseReason::CalibrationMissing => "未标定",
+            RefuseReason::NotApplicable => "对本波形无定义",
+            RefuseReason::NoUncertaintyModel => "无不确定度模型",
+            RefuseReason::ModelUnverified => "模型未验证",
+        }
+    }
+}
+
 impl From<UncertainReason> for RefuseReason {
     fn from(r: UncertainReason) -> Self {
         match r {
@@ -402,6 +422,99 @@ fn calibration_state(scale: &ScaleSet) -> CalibrationState {
     }
 }
 
+/// 证据包里每个量的显示名与单位。顺序即渲染顺序（与测量行一致）。
+///
+/// 表里没有的量不会消失 —— [`verdict_line`] 会把它们按原始键名列出，
+/// 提醒作者补显示名，而不是让一个量从模型眼里静默消失。
+const VERDICT_KEYS: [(&str, &str, &str); 14] = [
+    ("vpp", "Vpp", "V"),
+    ("min", "min", "V"),
+    ("max", "max", "V"),
+    ("mean", "mean", "V"),
+    ("rms", "RMS", "V"),
+    ("ac_rms", "AC-RMS", "V"),
+    ("freq_hz", "频率", "Hz"),
+    ("duty_pct", "占空比", "%"),
+    ("rise_ns", "上升时间", "ns"),
+    ("fall_ns", "下降时间", "ns"),
+    ("overshoot_pct", "过冲", "%"),
+    ("undershoot_pct", "下冲", "%"),
+    ("high_ns", "高电平脉宽", "ns"),
+    ("edges", "跃变数", "次"),
+];
+
+/// 一个通道的可信度行。
+///
+/// 证据包从前只印数值，不印判决 —— 模型看到 `频率=207046 Hz` 时没有任何
+/// 线索知道这个量其实是 `Refused`。MCP 的 JSON 出口一直带着 `quality`，
+/// 文本出口缺这一行就破了「同一份结论给人和给模型」。
+///
+/// 输出按「判决类别」分组，而不是逐量罗列：14 个字段逐个写成
+/// `Vpp=拒答(未标定)` 会占掉半屏，且同类原因重复到无法阅读。
+fn verdict_line(q: &Quality) -> Option<String> {
+    if q.verdicts.is_empty() {
+        return None;
+    }
+
+    let mut exact: Vec<&str> = Vec::new();
+    let mut uncertain: Vec<String> = Vec::new();
+    let mut bounds: Vec<String> = Vec::new();
+    // 原因 → 该原因下的量。用 Vec 而非 map：保持 VERDICT_KEYS 的顺序。
+    let mut refused: Vec<(&'static str, Vec<String>)> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+
+    let mut push_refused = |reason: &'static str, label: String| match refused
+        .iter_mut()
+        .find(|(r, _)| *r == reason)
+    {
+        Some((_, list)) => list.push(label),
+        None => refused.push((reason, vec![label])),
+    };
+
+    for (key, label, unit) in VERDICT_KEYS {
+        seen.push(key);
+        match q.verdicts.get(key) {
+            None => {}
+            Some(Verdict::Ok { u }) if *u == 0.0 => exact.push(label),
+            Some(Verdict::Ok { u }) => uncertain.push(format!("{label}±{u:.3} {unit}")),
+            Some(Verdict::Bounded { lower }) => {
+                bounds.push(format!("{label}≥{lower:.1} {unit}"));
+            }
+            Some(Verdict::Refused { reason }) => {
+                push_refused(reason.text(), label.to_string());
+            }
+        }
+    }
+
+    // 表外的新量：以键名出现，不静默丢弃。
+    for (key, verdict) in &q.verdicts {
+        if seen.contains(&key.as_str()) {
+            continue;
+        }
+        match verdict {
+            Verdict::Ok { u } if *u == 0.0 => uncertain.push(key.clone()),
+            Verdict::Ok { u } => uncertain.push(format!("{key}±{u:.3}")),
+            Verdict::Bounded { lower } => bounds.push(format!("{key}≥{lower:.1}")),
+            Verdict::Refused { reason } => push_refused(reason.text(), key.clone()),
+        }
+    }
+
+    let mut parts = Vec::new();
+    if !exact.is_empty() {
+        parts.push(format!("可信（精确）: {}", exact.join("/")));
+    }
+    if !uncertain.is_empty() {
+        parts.push(format!("可信: {}", uncertain.join("、")));
+    }
+    if !bounds.is_empty() {
+        parts.push(format!("下界: {}", bounds.join("、")));
+    }
+    for (reason, labels) in refused {
+        parts.push(format!("拒答（{reason}）: {}", labels.join("/")));
+    }
+    Some(parts.join("；"))
+}
+
 /// 把一次采集渲染成证据包文本 —— **唯一对外入口**。
 pub fn render_text(report: &AnalysisReport, ctx: &EvidenceContext<'_>) -> String {
     crate::report::render_sections(report, ctx)
@@ -465,6 +578,9 @@ pub(crate) fn channels_text(s: &mut String, report: &AnalysisReport, cap: &Captu
             "     过冲/下冲={over}/{under}  高电平脉宽={high}  跃变数={}",
             m.edges
         );
+        if let Some(v) = verdict_line(&ca.quality) {
+            let _ = writeln!(s, "     可信度: {v}");
+        }
     }
     if !any {
         let _ = writeln!(s, "（所有通道都测不出 —— 采集可能是空的）");
@@ -473,6 +589,12 @@ pub(crate) fn channels_text(s: &mut String, report: &AnalysisReport, cap: &Captu
         s,
         "注：频率与占空比已排除空闲段；上升/下降时间受采样周期限制，分辨率约 1 个采样周期。\
          过冲的参考电平是平台均值，不是全窗最大值。"
+    );
+    let _ = writeln!(
+        s,
+        "注 2：「可信（精确）」表示值确定但没有不确定度模型（如整数计数）；\
+         「可信」带 ± 的才是含不确定度的数；「下界」只保证不小于该值；\
+         「拒答」的量没有可信区间，上面印出的数只用于定位，**不要引用**。"
     );
 }
 
@@ -567,6 +689,43 @@ mod tests {
             text.contains(&format!("频率={:.1} Hz", m.freq_hz.expect("方波应有频率"))),
             "证据包与 AnalysisReport 的频率不一致：{text}"
         );
+    }
+
+    #[test]
+    fn verdict_line_groups_by_verdict_and_keeps_units() {
+        let cap = square_capture();
+        let report = AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim", true);
+        let line = verdict_line(&report.channels[0].quality).expect("应有可信度行");
+
+        assert!(
+            line.contains("拒答（未标定）: Vpp/min/max/mean/RMS/AC-RMS"),
+            "电压量应作为一组拒答：{line}"
+        );
+        assert!(
+            line.contains("下界: 上升时间≥") && line.contains(" ns"),
+            "边沿时间应给下界并带单位：{line}"
+        );
+        assert!(
+            line.contains("可信（精确）: 跃变数"),
+            "计数是精确值：{line}"
+        );
+        assert!(
+            line.contains("拒答（模型未验证）: 占空比"),
+            "占空比尚无自校验模型：{line}"
+        );
+    }
+
+    #[test]
+    fn verdict_line_does_not_drop_keys_missing_from_the_label_table() {
+        let mut q = Quality::default();
+        q.verdicts.insert(
+            "future_metric".into(),
+            Verdict::Refused {
+                reason: RefuseReason::NotApplicable,
+            },
+        );
+        let line = verdict_line(&q).expect("非空判决应渲染");
+        assert!(line.contains("future_metric"), "新量不能静默消失：{line}");
     }
 
     #[test]
