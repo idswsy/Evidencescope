@@ -385,6 +385,10 @@ GUI 测量面板（`gui/src/panels.rs:1112`）、`signal.rs:classify` 的周期�
 `method`（枚举）、`verdict`。全部为时间量，量纲 s，输出单位 ns。
 **不可测条件下的返回口径**：
 
+- 全段没有任何一条上升沿在 10–90% 之间含 ≥2 个内部样点（采样数据上可实现的物理门，
+  等价于物理 `ρ ≲ 1`）：返回 `Refused(EdgeTooFastForTie)`。该判定先于 ρ 判定 ——
+  0.35 对应的边沿在 857 kSPS 下测不出来，测得的 Tr 会饱和在 0.8–1.6 样点
+  （G3 落地记录见 §10.1）；
 - `ρ < 2` 且 `ρ ≥ ρ_min`：返回值但附 `grid_limited` 标记；
 - `ρ ≤ 0.35`：返回 `Refused(EdgeTooFastForTie)`（T2 的栅格拒答门【T2】；该门限的依据见 §11.3 冲突 3）；
 - `n < N_min`：返回 `Refused(TooFewEdges)`；
@@ -758,7 +762,54 @@ MCP 侧 `mcp/src/params.rs:146-172` 的 schema 由 `Scenario::parse` 生成，**
 | Q4 | **A** | 新量按桶/一行摘要进证据包；`MAX_CHARS` 保持 8000 |
 | Q5 | **A** | P3 落地时 N_min = 30；不足返回 `Refused(TooFewEdges)` |
 | Q6 | **A** | `capture.rs` 的 2048 口径计数不统一，继续标注「与实测中点不同源」 |
-| Q7 | **A → B** | 先沿用 T2 的 ρ ≤ 0.35 门；G3 用 `slow_edge_noisy` 实测 0.35 < ρ < 2 的偏差后再决定是否移动门限 |
+| Q7 | **A（维持）；B 以合成用例替代** | 保留 T2 的 `ρ ≤ 0.35` 门，并加一条采样可实现的物理门（无任何上升沿含 ≥2 个 10–90% 内部样点 → `Refused(EdgeTooFastForTie)`）。Q7-B 的 `slow_edge_noisy` 实测不可行（1 kHz、4096 点内约 4 条同向沿，达不到 N_min = 30），改用 128 沿合成时钟做构造式真值对账；真实边沿的非线性偏差仍未实测，故门限不移动（见 §10.1） |
+
+---
+
+### 10.1 G3 落地记录（2026-10-24）
+
+**范围**：P1 瞬态特征（`core/src/transient.rs`）、P3 TIE（`core/src/tie.rs`）、出口贯通
+（`AnalysisReport` → 证据包文本 / MCP `scope_measure` → 5 份黄金文本）。
+
+**与原计划的偏差**：
+
+1. **P3-T1/P3-T2 的场景不可行**。Q5 已冻结 `N_min = 30`，而 1 kHz 级场景在 4096 点内
+   只有约 4 条同向沿（`pwm_1k_25` / `pwm_1k_75` / `pwm_1k_5` / `slow_edge_noisy`）；
+   `uart_115k` 的边沿是瞬时跳变（`EdgeTooFastForTie`）；`i2c_100k` 的 SCL 实测上升
+   933 ns ≈ 0.8 样点（同样被物理门拒答）。因此**黄金场景中没有一个能给出 TIE 数值**，
+   全部按带原因的 `Refused` 导出。TIE 的真值核验改在 `tie.rs` 测试内用 128 沿合成
+   时钟完成：`ρ ≈ 2.4` 的构造式真值（σ、均值、峰峰值、逐点 TIE/周期抖动，容差 1e-6 ns）
+   与 `0.35 < ρ < 2` 的网格受限构造对账。
+2. **Q7-B 的替代**：`slow_edge_noisy` 达不到 N_min，无法实测 0.35 < ρ < 2 的偏差；
+   合成 2 样点线性沿时钟在该区间与构造真值一致（无额外偏差），但真实边沿在跨界两点
+   间的非线性未被测量 —— 保留拒答门与 `grid_limited` 标记，不移动门限。
+3. **振铃上界**：单峰/半周期不足 4 样点时只给 `ring_freq_upper_hz`，出口用新增的
+   `Verdict::BoundedAbove`（文本「上界: 振铃频率上界≤…」，瞬态行「振铃≤…」），
+   不写成下界。
+4. **CLI `sim measure` 未接入瞬态/TIE 行**。G3 的出口按 HANDOFF §2.1-3 定为
+   `AnalysisReport` → 证据包文本 / MCP `scope_measure`；`scope-cli sim measure`
+   仍只打印既有 `Measurements`。§6.2 里 `ring_alias` 的 CLI 期望（显示混叠拒答）
+   因此未落地 —— 该拒答路径由 `sim/src/waveform.rs::ring_alias_is_refused_as_aliased`
+   与证据包/MCP 输出覆盖。
+
+**出口判决口径**（`analysis::VERDICT_KEYS` 共 31 键）：
+
+- 精确计数 `edges` / `runts` / `tie_n_edges` → `Ok{u:0}`；
+- `tie_sigma_ns` → `Ok{u = σ/√(2(n−1))}`（§4.4 的模型，n = 30 时约 13%）；
+- `ring_freq_upper_hz` → `BoundedAbove`；
+- 其余新量（振铃频率、ζ、调节时间、RC τ、压摆率、ρ、TIE 均值/峰峰值、周期抖动、
+  单沿分辨率地板）**有值也只给 `Refused(NoUncertaintyModel)`**；测不出时按模块原因
+  拒答（`NotApplicable` / `EdgeTooFastForTie` / `TooFewEdges` / `NonStationary` 等）。
+
+**验收实测**：
+
+- `cargo test --workspace`：463 passed / 5 ignored（基线 438 / 5）；
+- A2 5 份黄金文本逐字节更新并通过；A3 跨出口逐字段比对通过（新增 1 条合成慢时钟用例）；
+  A4「无模型不得 Ok」通过；
+- 4096 点双通道证据包仍 < `MAX_CHARS / 2`；`MAX_CHARS = 8000` 未动；
+- `scope-mcp --selftest` 7/7；clippy `-D warnings` 与 `fmt --check` 干净。
+
+**未验证**：以上均为模拟器/合成数据结论，未上真机；不得据此写「在真实硬件上成立」。
 
 ---
 
