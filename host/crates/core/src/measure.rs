@@ -21,7 +21,7 @@ use crate::signal::detect_levels;
 ///
 /// 可选字段为 `None` 表示**测不出来**（直流没有周期、没有边沿就没有上升时间），
 /// 而不是 0 —— 项目纪律：宁可说不知道，也不给看似精确的垃圾数。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Measurements {
     /// 峰峰值（V）。
     pub vpp: f64,
@@ -123,8 +123,18 @@ pub fn measure(cap: &Capture, ch: usize, scale: &ChannelScale) -> Option<Measure
     }
 
     let mid = (lo as f64 + hi as f64) / 2.0;
-    let rising = rising_edges(s, mid);
-    let falling = falling_edges(s, mid);
+    // 迟滞带宽：h = min(3σ̂, 0.25·sep)。σ̂ 是数据自标定的噪声底，
+    // 不是固定常数；σ̂ 估不出（样点太少/全平坦）时退化为 h = 0（旧行为）。
+    let levels = detect_levels(s);
+    let sep = if levels.is_two_level() {
+        levels.sep_lsb
+    } else {
+        (hi - lo) as f64
+    };
+    let h = crate::edges::sigma_hat(s)
+        .map(|sigma| (3.0 * sigma).min(0.25 * sep))
+        .unwrap_or(0.0);
+    let (rising, falling) = crate::edges::edges_hysteretic(s, mid, h);
 
     // ── 周期：取相邻上升沿间隔的**中位数** ──
     //
@@ -414,6 +424,30 @@ pub(crate) struct GapFilter {
     pub dropped: usize,
     /// 通过筛选的间隔（样点）。
     pub kept: Vec<f64>,
+}
+
+impl GapFilter {
+    /// 过滤后间隔的变异系数 `cv = σ/μ`。
+    ///
+    /// 与 [`crate::signal::classify`] 的 `MAX_GAP_CV` 同一口径：假跃变会产生
+    /// 额外的短间隔，而中位数 ×1.5 过滤器只丢长间隔、不丢短间隔，所以 cv
+    /// 是「边沿集合被污染」的可观测量。
+    pub(crate) fn cv(&self) -> Option<f64> {
+        if self.kept.is_empty() {
+            return None;
+        }
+        let mean = self.kept.iter().sum::<f64>() / self.kept.len() as f64;
+        if mean <= 0.0 {
+            return None;
+        }
+        let var = self
+            .kept
+            .iter()
+            .map(|g| (g - mean) * (g - mean))
+            .sum::<f64>()
+            / self.kept.len() as f64;
+        Some(var.sqrt() / mean)
+    }
 }
 
 #[cfg(test)]

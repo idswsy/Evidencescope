@@ -12,7 +12,8 @@
 //!
 //! # 核心约定：仅转述已算出的结果，不作任何重算
 //!
-//! 测量取 [`crate::measure()`]（全项目唯一实现），波形包络取
+//! 测量取 [`crate::analysis::AnalysisReport`]（其内部调用全项目唯一的
+//! [`crate::measure()`]），波形包络取
 //! [`Capture::preview()`]（与 MCP 同源的 minmax 降采样）。
 //! **本模块不执行任何信号处理。**
 //!
@@ -31,11 +32,11 @@
 
 use std::fmt::Write as _;
 
+use crate::analysis::EvidenceContext;
 use crate::calib::ScaleSet;
 use crate::capture::Capture;
 use crate::command::DeviceConfig;
 use crate::i2c_decode::{I2cDecode, I2cDecodeConfig, Transaction};
-use crate::measure::measure;
 
 /// 波形包络的**目标**桶数。
 ///
@@ -89,22 +90,46 @@ pub struct EvidenceInput<'a> {
 ///
 /// 纯函数：无 IO、无全局状态、输入相同则输出逐字节相同。
 pub fn build_evidence(input: &EvidenceInput<'_>) -> String {
+    let report = crate::analysis::AnalysisReport::from_capture(
+        input.capture,
+        input.scale,
+        input.link,
+        input.simulated,
+    );
+    let ctx = crate::analysis::EvidenceContext {
+        capture: input.capture,
+        scale: input.scale,
+        link: input.link,
+        simulated: input.simulated,
+        config: input.config,
+        decode: input.decode,
+        decode_cfg: input.decode_cfg,
+        question: input.question,
+    };
+    crate::analysis::render_text(&report, &ctx)
+}
+
+/// 八段渲染的组装点。**只由 [`crate::analysis::render_text`] 调用**。
+pub(crate) fn render_sections(
+    report: &crate::analysis::AnalysisReport,
+    ctx: &crate::analysis::EvidenceContext<'_>,
+) -> String {
     let mut s = String::with_capacity(2048);
 
-    link_section(&mut s, input);
-    config_section(&mut s, input.config);
-    capture_section(&mut s, input.capture);
-    channels_section(&mut s, input);
-    signal_section(&mut s, input);
-    preview_section(&mut s, input.capture);
-    decode_section(&mut s, input);
-    footer_section(&mut s, input);
+    link_section(&mut s, ctx);
+    config_section(&mut s, ctx.config);
+    capture_section(&mut s, ctx.capture);
+    crate::analysis::channels_text(&mut s, report, ctx.capture);
+    signal_section(&mut s, ctx);
+    preview_section(&mut s, ctx.capture);
+    decode_section(&mut s, ctx);
+    footer_section(&mut s, ctx);
 
     truncate_to_cap(s)
 }
 
 /// 链路与设备。**第一段就声明模拟器**，不给模型先入为主的机会。
-fn link_section(s: &mut String, input: &EvidenceInput<'_>) {
+fn link_section(s: &mut String, input: &EvidenceContext<'_>) {
     let _ = writeln!(s, "== 链路与设备 ==");
     if input.simulated {
         let _ = writeln!(
@@ -205,79 +230,8 @@ fn capture_section(s: &mut String, cap: &Capture) {
 ///
 /// 这不是措辞问题：同一台设备的同一条通道，两个地方叫两个名字，
 /// 用户没有任何办法知道它们指的是同一条线。
-fn channel_label(ch: usize) -> String {
+pub(crate) fn channel_label(ch: usize) -> String {
     format!("CH{}", ch + 1)
-}
-
-/// 每通道的测量 —— 全部来自 `crate::measure()`，没有一个数是在这里算的。
-///
-/// ⚠ 表头的措辞很要紧。曾经写的是「可直接引用」，而系统提示词要求的是
-/// **不要复述界面上已有的数值** —— 两处正好相反。这里给的是**判断依据**，
-/// 不是让模型转达的内容；表头必须说清这一点，否则就是在自己拆自己的台。
-fn channels_section(s: &mut String, input: &EvidenceInput<'_>) {
-    let _ = writeln!(s);
-    let _ = writeln!(s, "== 通道测量（供你判断用；界面上已有，不必复述）==");
-
-    let mut any = false;
-    for ch in 0..input.capture.channels.len() {
-        let name = channel_label(ch);
-        let Some(m) = measure(input.capture, ch, &input.scale.get(ch)) else {
-            let _ = writeln!(s, "{name}: 测不出（通道无数据）");
-            continue;
-        };
-        any = true;
-        let _ = writeln!(
-            s,
-            "{name}: Vpp={:.4} V  min={:.4} V  max={:.4} V  mean={:.4} V  AC-RMS={:.4} V",
-            m.vpp, m.min, m.max, m.mean, m.ac_rms
-        );
-        // 「测不出」要写成「测不出」，不能写 0 —— 项目纪律：宁可说不知道
-        let freq = match m.freq_hz {
-            Some(f) => format!("{f:.1} Hz"),
-            None => "测不出（无明显周期）".to_string(),
-        };
-        let duty = match m.duty_pct {
-            Some(d) => format!("{d:.1} %"),
-            None => "测不出".to_string(),
-        };
-        let rise = match m.rise_ns {
-            Some(r) => format!("{r:.1} ns"),
-            None => "测不出（没有干净的边沿）".to_string(),
-        };
-        let fall = match m.fall_ns {
-            Some(f) => format!("{f:.1} ns"),
-            None => "测不出（没有干净的边沿）".to_string(),
-        };
-        let over = match m.overshoot_pct {
-            Some(p) => format!("{p:.1} %"),
-            None => "测不出（无双电平参考）".to_string(),
-        };
-        let under = match m.undershoot_pct {
-            Some(p) => format!("{p:.1} %"),
-            None => "测不出（无双电平参考）".to_string(),
-        };
-        let high = match m.high_ns {
-            Some(h) => format!("{h:.1} ns"),
-            None => "测不出（没有高电平段）".to_string(),
-        };
-        let _ = writeln!(
-            s,
-            "     频率={freq}  占空比={duty}  上升/下降={rise}/{fall}",
-        );
-        let _ = writeln!(
-            s,
-            "     过冲/下冲={over}/{under}  高电平脉宽={high}  跃变数={}",
-            m.edges
-        );
-    }
-    if !any {
-        let _ = writeln!(s, "（所有通道都测不出 —— 采集可能是空的）");
-    }
-    let _ = writeln!(
-        s,
-        "注：频率与占空比已排除空闲段；上升/下降时间受采样周期限制，分辨率约 1 个采样周期。\
-         过冲的参考电平是平台均值，不是全窗最大值。"
-    );
 }
 
 /// 波形形状 —— **工具自动判断，不是实测**。
@@ -292,7 +246,7 @@ fn channels_section(s: &mut String, input: &EvidenceInput<'_>) {
 ///    （「未检出」「低于门限」），不是「信号有缺陷」。
 ///
 /// 分类与证据全部来自 [`crate::signal::classify`]，本函数只格式化。
-fn signal_section(s: &mut String, input: &EvidenceInput<'_>) {
+fn signal_section(s: &mut String, input: &EvidenceContext<'_>) {
     let _ = writeln!(s);
     let _ = writeln!(
         s,
@@ -511,7 +465,7 @@ fn preview_section(s: &mut String, cap: &Capture) {
 /// 「缺 SDA，I2C 解码做不了」—— 而段名写着「I2C 解码」、无解码时还要求
 /// 模型解释为什么解不出来，注意力被整个钉在 I2C 上。段名改成「总线解码」，
 /// 无解码时**一句话带过**，波形本身的分析交给上一段（波形形状 / 测量）。
-fn decode_section(s: &mut String, input: &EvidenceInput<'_>) {
+fn decode_section(s: &mut String, input: &EvidenceContext<'_>) {
     let _ = writeln!(s);
     let _ = writeln!(s, "== 总线解码 ==");
 
@@ -596,7 +550,7 @@ fn decode_section(s: &mut String, input: &EvidenceInput<'_>) {
 }
 
 /// 结尾：把「你该怎么用这些数字」说死，防止模型自由发挥。
-fn footer_section(s: &mut String, input: &EvidenceInput<'_>) {
+fn footer_section(s: &mut String, input: &EvidenceContext<'_>) {
     let _ = writeln!(s);
     let _ = writeln!(s, "== 说明 ==");
     if input.simulated {

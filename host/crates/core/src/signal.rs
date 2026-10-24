@@ -608,8 +608,16 @@ pub fn classify(cap: &Capture, ch: usize) -> Option<Classification> {
     // 实测中点上的边沿（见模块头：不用固定 2048 的计数器）
     let (lo, hi) = (sum.min_lsb, sum.max_lsb);
     let edge_mid = (lo as f64 + hi as f64) / 2.0;
-    let rising = crate::measure::rising_edges(s, edge_mid);
-    let falling = crate::measure::falling_edges(s, edge_mid);
+    // 与 measure() 同一套迟滞口径：h = min(3σ̂, 0.25·sep)。
+    let sep = if levels.is_two_level() {
+        levels.sep_lsb
+    } else {
+        sum.pp_lsb as f64
+    };
+    let h = crate::edges::sigma_hat(s)
+        .map(|sigma| (3.0 * sigma).min(0.25 * sep))
+        .unwrap_or(0.0);
+    let (rising, falling) = crate::edges::edges_hysteretic(s, edge_mid, h);
     let gaps = crate::measure::filter_gaps(&rising).map(|f| {
         let mean = f.kept.iter().sum::<f64>() / f.kept.len() as f64;
         let var = f.kept.iter().map(|g| (g - mean) * (g - mean)).sum::<f64>() / f.kept.len() as f64;
