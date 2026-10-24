@@ -21,7 +21,7 @@
 //!
 //! 落在判决带内的样点**不猜**，计入 [`SignalQuality::unknown_scl`] /
 //! [`SignalQuality::unknown_sda`] 并产生 [`I2cWarning::DecisionBandSamples`]。
-//! 这条纪律的来源是项目定位 —— **宁可说「不知道」，也不给看似精确的垃圾数**。
+//! 这条纪律的来源是项目定位 —— **无法给出可信结论时必须显式拒答，不得输出看似精确的无依据数值**。
 //!
 //! # 与 MCP 的关系
 //!

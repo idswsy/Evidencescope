@@ -321,7 +321,7 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 ```
 
 - RMS / 方差**必须用 `u64` 累加**（`4095² × 4096 ≈ 2³⁶`，u32 必溢出）
-- 低信噪比时宁可回 `UNSUPPORTED` 或置 `quality` 标志，**不要回看似精确的垃圾数**
+- 低信噪比时应返回 `UNSUPPORTED` 或置 `quality` 标志，**不得返回看似精确的无依据数值**
 - v1 允许回 `UNSUPPORTED`（主机用全速原始数据自己算，精度更高）
 - **实现状态（2026-10-10 实测）**：设备端**恒回 `ERR_UNSUPPORTED`**（`App/measure.c` 不存在，
   `cmd_measure`，`proto_task.c:401-407`）；主机侧也**从不调用它** —— `scope_measure` 走本地

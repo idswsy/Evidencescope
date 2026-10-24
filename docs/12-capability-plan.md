@@ -397,7 +397,7 @@ D3 import ──→ 产出 Capture ──→ 复用 D1/D2 的出口（可并行�
 | file:line | 内容 |
 |---|---|
 | `host/crates/core/src/measure.rs:25-80` | `Measurements` 14 字段，无质量字段 |
-| `host/crates/core/src/measure.rs:22-23` | 「宁可说不知道」纪律注释 |
+| `host/crates/core/src/measure.rs:22-23` | 「无可信结论必须显式拒答」纪律注释 |
 | `host/crates/core/src/signal.rs:440-455` | `UncertainReason` 7 变体 |
 | `host/crates/core/src/report.rs:57-61` | `MAX_CHARS = 8_000` |
 | `host/crates/core/src/report.rs:65-86` | `EvidenceInput`（`decode: Option<&I2cDecode>`） |

@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn dc_has_levels_but_no_period() {
         // 直流：有电平，但频率/占空比/上升时间都**测不出来** ——
-        // 该报 None，不是 0（宁可说不知道）
+        // 该报 None，不是 0（无可信结论必须显式拒答）
         let mut cap = Capture::new(1, 800_000, 1, 64);
         cap.channels = vec![vec![2048u16; 64]];
         let m = measure(&cap, 0, &ChannelScale::default()).unwrap();

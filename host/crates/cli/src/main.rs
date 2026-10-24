@@ -606,7 +606,7 @@ fn measurement_text(
 
     let report = scope_core::AnalysisReport::from_capture(capture, scales, link, simulated);
     for &ch in targets {
-        // 「测不出」要写成「测不出」，不能写 0 —— 项目纪律：宁可说不知道
+        // 「测不出」要写成「测不出」，不能写 0 —— 项目纪律：无可信结论必须显式拒答
         let Some(ca) = report.channel(ch) else {
             let _ = writeln!(out, "  CH{}: 测不出（通道无数据）", ch + 1);
             continue;

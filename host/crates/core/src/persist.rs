@@ -190,7 +190,7 @@ pub fn check_writable(parent: &Path, forbidden_root: &Path, what: &str) -> Resul
     let real_parent = std::fs::canonicalize(parent)
         .map_err(|e| format!("解析路径 {} 失败：{e}", parent.display()))?;
     // 当前目录拿不到真实路径时**不放弃检查** —— 退回按字面路径比，
-    // 宁可误报也不放过（这条闸门是防密钥进仓库的）。
+    // 允许误报，不得漏报（该闸门用于防止密钥进入仓库）。
     let real_root = std::fs::canonicalize(forbidden_root).unwrap_or_else(|_| forbidden_root.into());
 
     if real_parent.starts_with(&real_root) {

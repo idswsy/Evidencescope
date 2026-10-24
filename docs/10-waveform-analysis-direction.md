@@ -61,7 +61,7 @@ Claim A 是 Claim B 的可提交子集。对外承诺的边界必须画清楚：
 | `Measurements` 结构 | `host/crates/core/src/measure.rs:25-80` | vpp/min/max/mean/rms/ac_rms/freq/duty/rise/fall/overshoot/undershoot/high_ns/edges 共 14 项 |
 | 稳健周期估计 | `measure.rs:13-15`（注释）、`measure.rs:137` | 「先中位数筛空闲段、再对保留间隔取均值」 |
 | 形状判定 | `host/crates/core/src/signal.rs`：`detect_levels` / `classify` | `LevelStats{occupancy_lsb, minority_frac, sep_lsb, verdict}`（`signal.rs:101`） |
-| **定性**拒绝作答 | `signal.rs:440-455` `enum UncertainReason`（**7** 个变体：`TooFewSamples`/`TooSmallAmplitude`/`NoPeriodicity`/`IntervalUnstable`/`FrequencyDrift`/`Aliased`/`ShapeUnrecognized`） | 这是全仓**唯一**的「说不知道」机制，且它**只报分类不报数值** |
+| **定性**拒绝作答 | `signal.rs:440-455` `enum UncertainReason`（**7** 个变体：`TooFewSamples`/`TooSmallAmplitude`/`NoPeriodicity`/`IntervalUnstable`/`FrequencyDrift`/`Aliased`/`ShapeUnrecognized`） | 这是全仓**唯一**的显式拒答机制，且它**只报分类不报数值** |
 | 「测不出」可表达 | `measure.rs:42-43/39/41`（`rise_ns`/`fall_ns`/`freq_hz`/`duty_pct` 均为 `Option<f64>`） | 与 `measure.rs:22-23` 的纪律一致：数据里没有中间样点时返回 `None`，不凑数 —— **这是已有的正确底子** |
 | 证据包三条纪律 | `host/crates/core/src/report.rs:283-289` | 表头声明是推断 / 每个判断带门限与样点数 / 判不出要归因为工具边界 |
 

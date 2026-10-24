@@ -473,7 +473,7 @@ impl<P: DevicePort> CommandBus<P> {
     pub fn get_status(&mut self) -> Result<DeviceStatus> {
         let resp = self.transaction(Cmd::GetStatus, Vec::new(), TIMEOUT_CONTROL)?;
         // 解析失败**不当成 Idle 混过去** —— 那会让「设备回了一个我们不认识的
-        // 状态」看起来像「设备空闲」。宁可报错。
+        // 状态」看起来像「设备空闲」。此时应直接报错。
         let st = DeviceStatus::decode(&resp.payload).ok_or_else(|| {
             ScopeError::Unsupported(format!(
                 "GET_STATUS 响应长度 {} 字节，协议规定 33 字节",

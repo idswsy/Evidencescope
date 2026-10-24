@@ -20,7 +20,7 @@ use crate::signal::detect_levels;
 /// 一个通道的测量结果。
 ///
 /// 可选字段为 `None` 表示**测不出来**（直流没有周期、没有边沿就没有上升时间），
-/// 而不是 0 —— 项目纪律：宁可说不知道，也不给看似精确的垃圾数。
+/// 而不是 0 —— 项目纪律：无可信结论的量必须显式拒答，不得输出看似精确的无依据数值。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Measurements {
     /// 峰峰值（V）。
