@@ -6,7 +6,7 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │  L5  Agent 层           Claude / 任意 LLM        GUI 内嵌 AI 面板   │
 │                          ↕ MCP (JSON-RPC)         ↕ HTTPS（单发）    │
-│  L4a MCP Server         15 个粗粒度工具，         L4b scope-gui     │
+│  L4a MCP Server         16 个粗粒度工具，         L4b scope-gui     │
 │                          schema 由参数类型生成     （人操作的界面）  │
 │                          └──────────┬──────────────────┘            │
 │                                     ↕ 直接调用（**阻塞**，无 async） │

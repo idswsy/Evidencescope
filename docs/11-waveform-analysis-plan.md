@@ -89,10 +89,10 @@ T1 矩阵的 11 行原始措辞在 T1 会话回复中【T1】。
 | 13 | 混叠主动拦截 | 部分实现 | `signal.rs:711-715`、`signal.rs:745-747`（`Aliased`）；`measure.rs` 全文无混叠门 | 同一份证据包里可出现「形状段报采样密度不足、测量段照给频率」（`report.rs:217-281` 与 `report.rs:439-449`） |
 | 14 | 采集/触发/控制与多档采样率 | 已实现 | `core/src/lib.rs:85-104`、`core/src/command.rs`、`core/src/acquire.rs` | 代码 |
 | 15 | I2C 解码（主机侧） | 部分实现 | `core/src/i2c_decode.rs:1047`、`:1064`、`:116-124`（门限）、`:658-690`（去抖） | 真机单通道（引用 `docs/10` G6），当前仅模拟器可演示 |
-| 16 | 自动化接口（MCP 14 个工具） | 已实现 | `mcp/src/main.rs:319-446`；`scope_measure` 出口 `mcp/src/session.rs:864-916`；参数类型 `mcp/src/params.rs:307-336` | 代码 |
+| 16 | 自动化接口（MCP 16 个工具） | 已实现 | `mcp/src/main.rs` 的 `TOOLS`；`scope_measure` 出口 `mcp/src/session.rs`；参数类型 `mcp/src/params.rs` | 代码 |
 | 17 | 证据包（人与模型同一出口，文本） | 已实现 | `report.rs:91-104`（8 段）、`:283-293`（三条纪律）、`:61`（`MAX_CHARS = 8000`） | 代码；测量与分类结果无 serde（`measure.rs:24`、`signal.rs:405` 的 derive 清单），故证据包为文本而非机器可读对象 |
 | 18 | 跨采集累积（多次采集平均/直方图） | 未实现 | 采集仓 `core/src/capture.rs:315-367`、MCP 会话持有 `mcp/src/session.rs:50` | 现有存储为「保留最近 N 次采集」的定容历史（`capture.rs:313-364`，超出容量淘汰最旧），无跨采集统计出口 |
-| 19 | CSV 数据导入 | 未实现 | 只有导出：`capture.rs:204-227` | 代码 |
+| 19 | CSV 数据导入 | 已实现 | `core/src/import.rs`（`from_csv`）、`capture.rs`（`to_csv` 写 `# rate_hz=` 头） | 代码；CLI `import` 与 MCP `scope_import_capture` 两条入口，C1–C6 见 `docs/12` |
 | 20 | 抖动分解（RJ/DJ）、浴盆图、BER 外推 | 未实现 | 无对应代码 | 对照 ngscopeclient 手册 26.153「Rj + BUj」、26.94/26.195 浴盆图【T1】（章节号经本会话读取 `ngscopeclient.org/manual/contentsname.html` 复核） |
 | 21 | 分析块可组合（filter graph） | 未实现 | 无对应代码 | 对照 ngscopeclient 手册 26.1【T1】；本方案不采纳（§5.2） |
 

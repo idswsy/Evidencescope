@@ -1,6 +1,7 @@
 # 12 · 软件能力规划（分析结果对象 / 协议解码插件 / 波形导入）
 
-> **文档状态**：方案稿，未实施。本文件只写设计与验收，不含实现代码。
+> **文档状态**：D1–D3 已实施（G1/G2a/G2b）。本文件写设计与验收，
+> 实施状态只在各能力开头标注，不贴实现代码。
 > **与其它文档的关系**：
 > - `docs/10-waveform-analysis-direction.md` —— 创新点依据、证据、红线（本文件不重复）。
 > - `docs/11-waveform-analysis-plan.md` —— **算法层**方案（迟滞、σ̂、TIE、瞬态、混叠判决）。
@@ -274,6 +275,10 @@ pub fn autodetect(cap: &Capture) -> Vec<ProtocolCandidate>; // 只给建议，�
 
 ## 4 D3 · 第三方波形导入
 
+> **状态**：已实现（G2b）。`core/src/import.rs` 提供 `from_csv`，CLI 入口
+> `scope-cli import`、MCP 入口 `scope_import_capture`；C1–C6 由
+> `import.rs` 的 14 项单元测试与 `mcp/src/session.rs` 的导入回环测试钉住。
+
 ### 4.1 现状
 
 | 事实 | 位置 |
@@ -310,7 +315,7 @@ Time(s),CH1V,CH2V
 
 ### 4.3 接口
 
-- CLI：`scope import <file.csv> [--rate-hz N] [--full-scale V] [--offset V] [--raw]`
+- CLI：`./host/run.sh run -p scope-cli -- import <file.csv> [--rate-hz N] [--full-scale V] [--offset V] [--raw] [--normalize-t0] [--channel N]`
 - MCP：`scope_import_capture(path)`，路径限定为工作目录内且扩展名为 `.csv`；越界路径报错，不做隐式展开。
 - 无 `Time` 列时必须给 `--rate-hz`；既无时间列又无速率 → `RateMissing`，不猜。
 
@@ -406,7 +411,7 @@ D3 import ──→ 产出 Capture ──→ 复用 D1/D2 的出口（可并行�
 | `host/crates/core/src/i2c_decode.rs:1040` | `decode_capture` |
 | `host/crates/mcp/src/session.rs:866-906` | 手抠 13 个 JSON 键 |
 | `host/crates/mcp/src/session.rs:932-940` | I2C 解码要求 ≥2 通道 |
-| `host/crates/mcp/src/main.rs:321-438` | 15 个 MCP 工具 |
+| `host/crates/mcp/src/main.rs:321-438` | 16 个 MCP 工具 |
 | `host/crates/sim/src/waveform.rs:143/366/768/1386` | `uart_115k` 场景与真值测试 |
 | `host/crates/sim/src/waveform.rs:300-310` | `next_sample` 索引纯函数 |
 | `firmware/App/proto_task.c:39` | `DEV_CH_COUNT = 1` |

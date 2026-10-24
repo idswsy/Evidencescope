@@ -159,8 +159,9 @@ F103/
 ./host/run.sh test              # Rust 端：要求所有 test result 为 ok（条数不写死）
 ./firmware/run_tests.sh         # 固件 App 层，7 个测试程序 / 252 项断言，在 PC 上运行
 
-# 2. 对模拟器采集一次波形
+# 2. 对模拟器采集一次波形，再从 CSV 导入做测量（「不连设备」那条路径）
 ./host/run.sh run -p scope-cli -- sim capture --scenario sine_1k_3v3 -n 1024 -o wave.csv
+./host/run.sh run -p scope-cli -- import wave.csv
 
 # 3. 查看 I2C 双通道解码
 ./host/run.sh run -p scope-cli -- sim capture --scenario i2c_100k -n 2048 -o i2c.csv
@@ -253,17 +254,19 @@ AI 分析、故障注入、日志、帮助。
 #### 5.4.1 MCP 服务
 
 `scope-mcp` 是运行在 stdio 上的标准 MCP Server，每行一条 JSON-RPC 消息。
-注册 15 个工具：
+注册 16 个工具：
 
 `list_devices`、`connect`、`disconnect`、`status`、`configure`、`capture`、
 `read_waveform`、`measure`、`decode`、`i2c_decode`、`list_captures`、`save_capture`、
-`watch`、`sim_set_scenario`、`debug_raw`。
+`import_capture`、`watch`、`sim_set_scenario`、`debug_raw`。
 
 `scope_decode` 是统一解码入口（`protocol=i2c|uart`；UART 8N1 单通道，真机可用），
-`scope_i2c_decode` 是它的兼容别名。
+`scope_i2c_decode` 是它的兼容别名。`scope_import_capture` 从 CSV 导入一次采集
+（不连设备；路径限工作目录内 `.csv`），导入后的 `capture_id` 可直接用于
+`scope_measure` / `scope_decode`。
 
 `scope_debug_raw` 仅在环境变量 `SCOPE_MCP_DEBUG=1` 时注册，故默认 `tools/list`
-返回 14 个。工具的参数 schema 由 Rust 参数类型（schemars）现场生成，
+返回 15 个。工具的参数 schema 由 Rust 参数类型（schemars）现场生成，
 并有测试钉住「schema 声明的字段集等于实现能解析的字段集」。
 
 ```bash
