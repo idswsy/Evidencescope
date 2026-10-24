@@ -666,6 +666,63 @@ mod tests {
         );
     }
 
+    /// A4 的第二半：**已标定**只换电压口径，不换「没有模型就拒答」。
+    ///
+    /// 回归：若把电压判决写成 `calibrated ? Ok{u:0} : Refused(CalibrationMissing)`，
+    /// 这条立刻红。标定解决的是「LSB 到伏特的换算」，不是「这个数的
+    /// 不确定度是多少」——后者仍然没有模型。
+    #[test]
+    fn calibrated_voltages_still_refuse_without_a_model() {
+        use crate::calib::CalibrationStore;
+        use crate::capture::ChannelScale as CalScale;
+
+        let cap = square_capture();
+        let uid = [0x5e; 12];
+        let mut store = CalibrationStore::empty();
+        store
+            .set_channel(uid, 0, CalScale::default(), None, 0)
+            .expect("写入标定");
+        let scale = store.scales_for(Some(&uid), 1);
+        assert!(scale.all_calibrated(), "前置条件：这一窗应已标定");
+
+        let report = AnalysisReport::from_capture(&cap, &scale, "sim(square)", true);
+        let q = &report.channels[0].quality;
+
+        for key in ["vpp", "min", "max", "mean", "rms", "ac_rms"] {
+            assert_eq!(
+                q.verdicts.get(key),
+                Some(&Verdict::Refused {
+                    reason: RefuseReason::NoUncertaintyModel
+                }),
+                "{key} 已标定但没有不确定度模型，必须拒答"
+            );
+        }
+        for key in ["freq_hz", "overshoot_pct", "undershoot_pct", "high_ns"] {
+            assert_eq!(
+                q.verdicts.get(key),
+                Some(&Verdict::Refused {
+                    reason: RefuseReason::NoUncertaintyModel
+                }),
+                "{key} 没有不确定度模型，必须拒答"
+            );
+        }
+        assert_eq!(
+            q.verdicts.get("duty_pct"),
+            Some(&Verdict::Refused {
+                reason: RefuseReason::ModelUnverified
+            })
+        );
+        for key in ["rise_ns", "fall_ns"] {
+            assert!(
+                matches!(q.verdicts.get(key), Some(Verdict::Bounded { .. })),
+                "{key} 只能给下界（亚样点边沿）：{:?}",
+                q.verdicts.get(key)
+            );
+        }
+        // 唯一允许 Ok 的量：整数计数，值就是数出来的。
+        assert_eq!(q.verdicts.get("edges"), Some(&Verdict::Ok { u: 0.0 }));
+    }
+
     #[test]
     fn report_uses_the_same_measurements_as_the_old_path() {
         let cap = square_capture();
