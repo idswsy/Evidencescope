@@ -657,8 +657,9 @@ I2C 场景下的 `CAP_CH_DUAL`）。模拟器自述是「复刻真实行为」�
 ### 11.5 主机侧（host）的对应缺口
 
 - `PING` 的 `tick_us` 不解析（见 §5.1 / §6.6）。
-- MCP 的 `scope_measure` 只出口 **AC-RMS**（`ac_rms_v`，`session.rs:879`）；
-  `Measurements` 里的真 RMS **没有任何出口**（不存在 `rms_v` 字段）。
+- ~~MCP 的 `scope_measure` 只出口 **AC-RMS**（`ac_rms_v`，`session.rs:879`）；
+  `Measurements` 里的真 RMS **没有任何出口**（不存在 `rms_v` 字段）。~~
+  **✅ 已修（G1，2026-10-24）**：`scope_measure` 同时返回 `ac_rms_v` 与 `rms_v`。
   文案若承诺"RMS"，必须指明是哪一个 —— 两者对带直流偏置的信号差别很大。
 
 > **契约与实现的关系**：以上都是"实现落后于契约"，**没有一条是契约写错了**。

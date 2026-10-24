@@ -139,7 +139,7 @@ Agent 拿到的是它没要求的配置下的数据。
 | `scope_configure(...)` | **一个工具替代 N 个 `set_*`**，返回 `applied` + `warnings` | `SET_*` |
 | `scope_capture(mode?, timeout_ms?)` | 阻塞到触发完成，默认回**统计量 + ≤256 点 minmax 预览** | `ARM` + `EVENT_TRIGGER` + `READ_BUFFER` |
 | `scope_read_waveform(capture_id, ...)` | 唯一按需拉分片入口，硬顶 4096 点，超出拒绝 | `READ_BUFFER` |
-| `scope_measure(capture_id, metrics)` | 纯数字 + 单位，无波形 | `MEASURE` 或主机侧算 |
+| `scope_measure(capture_id, metrics)` | 纯数字 + 单位 + 每量判决（`quality`），无波形 | `MEASURE` 或主机侧算 |
 | `scope_i2c_decode(capture_id, ...)` | **解码 I2C 帧序列 + 信号质量评估**（本项目的招牌能力） | 主机侧解码 |
 | `scope_list_captures()` | 历史采集注册表（保留最近 16 次） | 无（本地） |
 | `scope_save_capture(capture_id, path)` | **全量数据只进磁盘，不进 LLM token** | 无（本地） |

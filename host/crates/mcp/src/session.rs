@@ -856,12 +856,19 @@ impl Session {
         // 「借用能不能同时成立」这种事绊住后面的改动。
         let scales = self.calib_view.clone();
         let calibrated = scales.all_calibrated();
+        // link / simulated 用于 provenance；在借 `self.store` 之前取完。
+        let (link, simulated) = match self.bus.as_ref() {
+            Some(bus) => (bus.describe(), bus.is_simulated()),
+            None => ("未连接".to_string(), false),
+        };
+        let report = scope_core::AnalysisReport::from_capture(cap, &scales, &link, simulated);
         let mut out = serde_json::Map::new();
         for ch in 0..cap.channels.len() {
             if only_ch.is_some_and(|only| ch != only) {
                 continue;
             }
-            if let Some(m) = scope_core::measure(cap, ch, &scales.get(ch)) {
+            if let Some(ca) = report.channel(ch) {
+                let m = &ca.measurements;
                 let mut row = serde_json::Map::new();
                 if has(MetricKind::Vpp) {
                     row.insert("vpp_v".into(), json!(m.vpp));
@@ -876,7 +883,10 @@ impl Session {
                     row.insert("mean_v".into(), json!(m.mean));
                 }
                 if has(MetricKind::Rms) {
+                    // `ac_rms_v` 是扣直流后的 RMS，`rms_v` 是真 RMS。
+                    // 既有键保持不变，新键是加性的。
                     row.insert("ac_rms_v".into(), json!(m.ac_rms));
+                    row.insert("rms_v".into(), json!(m.rms));
                 }
                 if has(MetricKind::Freq) {
                     row.insert("freq_hz".into(), json!(m.freq_hz));
@@ -902,12 +912,16 @@ impl Session {
                 if has(MetricKind::Edges) {
                     row.insert("edges".into(), json!(m.edges));
                 }
+                row.insert("quality".into(), json!(ca.quality));
                 out.insert(format!("ch{ch}"), Value::Object(row));
             }
         }
         Ok(json!({
+            "schema": report.schema,
             "capture_id": id,
+            "provenance": report.provenance,
             "measurements": out,
+            "notes": report.notes,
             // 结构化地告诉模型「伏特值可不可信」。写在一句中文 note 里，
             // 模型得读懂那句话才知道要打折；一个布尔字段它不会漏掉。
             "voltage_calibrated": calibrated,
@@ -1904,6 +1918,26 @@ mod tests {
         // 幅值必须是正的 —— 回归：曾经把幅值当电平换算，得到负数
         assert!(ch0["vpp_v"].as_f64().unwrap() > 0.0);
         assert!(ch0["ac_rms_v"].as_f64().unwrap() >= 0.0);
+        // 真 RMS 也必须有出口 —— 从前只有 AC-RMS，真 RMS 完全消失
+        assert!(ch0["rms_v"].as_f64().unwrap() >= 0.0);
+        // 统一分析结果对象的三个键
+        assert_eq!(v["schema"], "analysis/v1");
+        assert_eq!(v["provenance"]["source"]["kind"], "device");
+        assert_eq!(v["provenance"]["source"]["simulated"], true);
+        // 每个量都有判决；频率第一版至少是「拒答」，不能凭空 Ok
+        assert_eq!(ch0["quality"]["verdicts"]["edges"]["kind"], "ok");
+        assert_eq!(ch0["quality"]["verdicts"]["freq_hz"]["kind"], "refused");
+        // A3：MCP 出口与同一个 AnalysisReport 的标量逐字段一致
+        let cap = s.store.get(1).expect("采集应还在 store 里");
+        let scales = s.calib_view.clone();
+        let report = scope_core::AnalysisReport::from_capture(cap, &scales, "sim", true);
+        let ca = report.channel(0).expect("报告应有通道 0");
+        assert_eq!(ch0["vpp_v"].as_f64().unwrap(), ca.measurements.vpp);
+        assert_eq!(ch0["rms_v"].as_f64().unwrap(), ca.measurements.rms);
+        assert_eq!(
+            ch0["freq_hz"].as_f64().unwrap(),
+            ca.measurements.freq_hz.unwrap()
+        );
         // SCL 是 100 kHz
         let f = ch0["freq_hz"].as_f64().unwrap();
         assert!((f - 100_000.0).abs() < 500.0, "实测 {f} Hz");

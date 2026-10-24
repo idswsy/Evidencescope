@@ -61,7 +61,7 @@
 ```rust
 /// 对外唯一的分析结果类型。所有出口（MCP / 证据包 / CLI / GUI）消费它。
 pub struct AnalysisReport {
-    pub schema: &'static str,          // "analysis/v1"
+    pub schema: String,               // "analysis/v1"（String 而非 &'static str，serde 可反序列化）
     pub capture_id: u16,
     pub rate_hz: u32,
     pub provenance: Provenance,
@@ -85,7 +85,8 @@ pub struct ChannelAnalysis {
 
 pub struct Quality {
     pub noise_lsb: Option<f64>,       // σ̂，来自 docs/11 §4.2，未自标定时为 None
-    pub verdicts: Vec<(&'static str, Verdict)>, // ("freq_hz", Verdict)，键与 Measurements 字段同名
+    pub hysteresis_lsb: Option<f64>,  // h = min(3σ̂, 0.25·sep)；σ̂ 为 None 时也为 None
+    pub verdicts: BTreeMap<String, Verdict>, // 键与 Measurements 字段同名
 }
 
 pub enum Verdict {
@@ -128,7 +129,8 @@ pub enum RefuseReason {
     "channel": 0,
     "measurements": {"vpp": 3.134, "mean": 1.652, "freq_hz": 1000.2, "...": "同现有 14 字段"},
     "quality": {
-      "noise_lsb": null,
+      "noise_lsb": 18.7,
+      "hysteresis_lsb": 56.1,
       "verdicts": {"freq_hz": {"kind": "ok", "u": 0.4},
                    "rise_ns": {"kind": "bounded", "lower": 933.0},
                    "duty_pct": {"kind": "refused", "reason": "ModelUnverified"}}
@@ -152,7 +154,7 @@ pub enum RefuseReason {
 | A2 | `report.rs` 不再直接取 `Measurements` 字段（唯一取字段处是 `analysis::render_text`） | `grep -nE "\bm\.(vpp|min|max|mean|rms|ac_rms|freq_hz|duty_pct|rise_ns|fall_ns|overshoot_pct|undershoot_pct|high_ns|edges)\b" host/crates/core/src/report.rs` 应为 0 行；另加 5 个代表场景的证据包黄金文本逐字节比对 |
 | A3 | MCP 与证据包对同一采集给出一致的标量 | 新增测试：同一 `Capture` 走两个出口，逐字段比较 |
 | A4 | 无不确定度时**不得**输出 `ok` 判决 | `Quality::empty()` 下：无模型的量为 `Refused(NoUncertaintyModel)`；未标定的电压量为 `Refused(CalibrationMissing)`；占空比为 `Refused(ModelUnverified)` |
-| A5 | 主机侧测试数不下降 | `host/run.sh test`，起点 386 passed / 5 ignored |
+| A5 | 主机侧测试数不下降 | `host/run.sh test`，起点 386 passed / 5 ignored；G1 落地后 399 passed / 5 ignored |
 
 ### 2.5 风险
 

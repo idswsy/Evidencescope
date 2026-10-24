@@ -382,7 +382,7 @@ const TOOLS: &[ToolSpec] = &[
     ),
     tool!(
         "scope_measure",
-        "对指定采集做测量：频率/峰峰值/均值/RMS/占空比/上升与下降时间/过冲/下冲/脉宽/跃变数。返回纯数字+单位",
+        "对指定采集做测量：频率/峰峰值/均值/RMS/占空比/上升与下降时间/过冲/下冲/脉宽/跃变数。每个量带 quality 判决；返回 schema/provenance/quality，单位与语义不变",
         "主机侧计算（精度最高）；流模式可走 MEASURE",
         "总是",
         ToolAnnotations::READ_ONLY,

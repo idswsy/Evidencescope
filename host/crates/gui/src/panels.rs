@@ -1077,6 +1077,15 @@ pub fn detail_panel(app: &mut App, ui: &mut egui::Ui) {
     decode_panel(app, ui);
 }
 
+/// 把判决缩成界面能放下一行的小串。
+fn verdict_short(v: &scope_core::Verdict) -> String {
+    match v {
+        scope_core::Verdict::Ok { u } => format!("±{u:.3}"),
+        scope_core::Verdict::Bounded { lower } => format!("≥{lower:.1}"),
+        scope_core::Verdict::Refused { reason } => format!("拒答:{reason:?}"),
+    }
+}
+
 /// 测量结果 —— 每个通道一行。
 fn measure_section(app: &mut App, ui: &mut egui::Ui) {
     let Some(cap) = app.capture.clone() else {
@@ -1084,6 +1093,10 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
     };
     // 逐通道换算，按设备 uid 查。**克隆一份**：下面 `app` 还要可变借用。
     let scales = app.calib_view.clone();
+    // 与证据包/MCP 同一个分析结果对象 —— 界面不再自己解释 Measurements。
+    let link = app.link_description();
+    let simulated = app.evidence_simulated();
+    let report = scope_core::AnalysisReport::from_capture(&cap, &scales, &link, simulated);
 
     ui.horizontal(|ui| {
         ui.strong("测量");
@@ -1109,9 +1122,10 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
     });
 
     for ch in 0..cap.channels.len() {
-        let Some(m) = vmodel::measure(&cap, ch, &scales.get(ch)) else {
+        let Some(ca) = report.channel(ch) else {
             continue;
         };
+        let m = &ca.measurements;
         let freq = m
             .freq_hz
             .map(|f| format!("{:.1} kHz", f / 1000.0))
@@ -1159,6 +1173,26 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
             format!("{over}/{under}"),
             high,
             m.edges
+        ));
+        // 第三行：可信度。与 MCP 的 quality 是同一份对象，不另算。
+        let noise = ca
+            .quality
+            .noise_lsb
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "—".into());
+        let h = ca
+            .quality
+            .hysteresis_lsb
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "—".into());
+        let freq_verdict = ca
+            .quality
+            .verdicts
+            .get("freq_hz")
+            .map(verdict_short)
+            .unwrap_or_else(|| "—".into());
+        ui.weak(format!(
+            "      可信度：σ̂={noise} LSB  迟滞={h} LSB  频率={freq_verdict}"
         ));
     }
     // 这几个边界必须写出来，否则数字会被过度解读：
