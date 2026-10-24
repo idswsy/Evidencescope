@@ -907,7 +907,7 @@ mod tests {
         assert!(s.error.is_none());
     }
 
-    /// 没配密钥时保存要给出「存不下来」，而不是静默假装成功。
+    /// 没配密钥时保存要返回「存储失败」，而不是静默返回成功。
     #[test]
     fn saving_without_a_config_path_says_so() {
         let s = state_with_key(Some("sk-x"));

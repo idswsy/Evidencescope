@@ -71,11 +71,12 @@ pub struct EvidenceInput<'a> {
     ///
     /// 从 `&ChannelScale` 换成 `&ScaleSet`：证据包里那句「是未标定还是
     /// 已标定」必须**如实反映来源**，而不是写死一句「未标定」——
-    /// 模型据此决定敢不敢把伏特值当准数用。
+    /// 伏特换算值的可信度判定以该标注为前提。
     pub scale: &'a ScaleSet,
     /// 链路描述，例如 `sim(i2c_100k)` 或 `COM7 @ 921600`。
     pub link: &'a str,
-    /// 数据是不是模拟器产生的。**必须如实填** —— 它决定模型敢不敢下结论。
+    /// 数据是不是模拟器产生的。**必须如实填** —— 模型对真实硬件的
+    /// 结论均以此为前提。
     pub simulated: bool,
     /// 设备回显的配置。没连上时为 `None`。
     pub config: Option<&'a DeviceConfig>,
@@ -185,7 +186,7 @@ fn config_section(s: &mut String, config: Option<&DeviceConfig>) {
     );
 }
 
-/// 采集本身的元数据。溢出要显式标出来 —— 有它的数据不能假装完整。
+/// 采集本身的元数据。溢出要显式标出来 —— 带该标志的数据不得按完整数据处理。
 fn capture_section(s: &mut String, cap: &Capture) {
     let _ = writeln!(s);
     let _ = writeln!(s, "== 本次采集 ==");
@@ -1372,7 +1373,7 @@ mod tests {
     /// **一份 4096 点的真实采集，证据包有多大。**
     ///
     /// 这条是有用的刻度尺：成本讨论里反复要引用这个数，
-    /// 而拍脑袋估的和实际量的差得很远（我估过 2000+ 字符，实测见下）。
+    /// 未经实测的估算与实际值差距很大（估算 2000+ 字符，实测见下）。
     #[test]
     fn a_4096_point_capture_measures_its_own_size() {
         let mut cap = Capture::new(1, 857_142, 2, 4096);

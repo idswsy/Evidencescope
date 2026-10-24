@@ -58,7 +58,7 @@ pub struct Capture {
     pub device_tick_us: u32,
     /// 抓取时的墙钟时间（Unix 秒），用于 `list_captures` 排序。
     pub wall_time: u64,
-    /// 期间是否发生溢出 —— 有这个标志的数据**不能假装完整**。
+    /// 期间是否发生溢出 —— 带该标志的数据**不得按完整数据处理**。
     pub overrun: bool,
     /// 期望的样点数（用于识别缺口）。
     pub expected_samples: u32,

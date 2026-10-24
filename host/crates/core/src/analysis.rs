@@ -86,7 +86,7 @@ pub enum Source {
     },
 }
 
-/// 标定状态 —— 只描述「敢不敢把伏特值当准数」，不携带换算参数本身。
+/// 标定状态 —— 只描述「伏特换算值是否可信」，不携带换算参数本身。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum CalibrationState {

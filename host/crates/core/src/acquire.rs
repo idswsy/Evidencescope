@@ -307,7 +307,7 @@ pub fn acquire_cancellable<P: DevicePort>(
                 ScopeError::Unsupported(format!("分片头解析失败（payload {} 字节）", payload.len()))
             })?;
             if !hdr.is_valid() {
-                // 溢出/无效标志 —— 这份数据不能假装完整，如实标记
+                // 溢出/无效标志 —— 该数据不能按完整数据处理，须如实标记
                 capture.overrun = true;
             }
 

@@ -60,7 +60,7 @@ pub enum Parity {
 /// UART 解码参数。
 ///
 /// 通道**不在**这里：[`DecodeRequest::channels`] 是唯一来源（空 = 自动取
-/// 通道 0）。同一件事写两处，总有一天会打架。
+/// 通道 0）。同一信息在两处维护，将产生不一致风险。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UartConfig {
     /// 波特率。**0 不是「自动」**——自动估计是建议性功能，未实现；

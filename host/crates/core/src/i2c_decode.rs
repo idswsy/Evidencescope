@@ -1472,7 +1472,7 @@ mod tests {
 
     #[test]
     fn truncated_frame_is_marked_incomplete() {
-        // 采集窗口在事务中间被切断：不能假装这一帧是完整的
+        // 采集窗口在事务中间被切断：该帧不得按完整帧处理
         let mut b = Builder::new();
         b.start(4);
         b.byte(0x88, true, 4);

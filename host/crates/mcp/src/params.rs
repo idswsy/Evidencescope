@@ -189,7 +189,7 @@ impl JsonSchema for ScenarioArg {
 /// 采集方式。
 ///
 /// `stream` 在 schema 里出现是**有意的**：固件侧 STREAMING 还没实现，
-/// 与其在 schema 里假装它不存在（客户端传了会撞上一句生硬的结构错误），
+/// 与其在 schema 中省略该字段（客户端传入时只会得到一句生硬的结构错误），
 /// 不如收下来，然后给一句「尚未实现，要连续观察请用 scope_watch」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
