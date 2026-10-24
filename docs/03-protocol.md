@@ -178,10 +178,9 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 > `scope_core::DeviceStatus` 解析全部 33 字节，MCP 的 `scope_status` 通过
 > `link_health` 透出（含一句 `clean` 判据）。
 >
-> 回归：这三段曾经**全是假的** —— 模拟器把 `overrun_samples` / `rx_crc_err` /
-> `rx_dropped` 写死为 `0`，而 core 的 `get_status` 只读第一个字节（`state`）
-> 就把剩下 32 字节丢了。在 `sim` 上读到「零溢出、零 CRC 错」时，那根本不是
-> 证据，而是**没人统计过** —— 一个 Agent 会把它当成「链路很干净」的依据。
+> 回归：这三个计数器原先是假的 —— `overrun_samples` / `rx_crc_err` / `rx_dropped`
+> 写死 `0`，core 的 `get_status` 只读 `state` 字节、丢掉其余 32 字节。那时在 `sim`
+> 上读到"零溢出"只说明没人统计过、不是证据，Agent 会把它当成"链路很干净"。
 
 `RESET` 用 `magic` 防误触发。主机需重新 `GET_INFO` 并重置 seq。
 
@@ -193,9 +192,8 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 > | `RESET` | `Ack` 之后**软复位 ~50 ms** | **不软复位**：`acq_stop` + `acq_init`（配置回出厂值）+ `Ack`（`cmd_reset`，`proto_task.c:388-399`） |
 > | `GET_INFO.caps` | 声明支持的触发模式与波形格式 | ✅ **已修（`4e165e6`）**：原先声明 `CAP_TRIG_SOFT` 与 `CAP_FMT_MINMAX`，但 `FORCE_TRIGGER` 恒回 `ERR_UNSUPPORTED`、`READ_BUFFER` 拒绝 MINMAX —— 两位已从 `DEV_CAPS` 摘掉（`proto_task.c`），详见 §11.2 |
 >
-> `RESET` 不软复位对主机其实是好事（会话中途不断链），但契约页必须写清；
-> `PING.tick_us` 仍两端都没实现，要么补实现、要么改契约，不要悬着；
-> `caps` 过度声明那处**已修**（`4e165e6`）。逐条汇总见文末 §11。
+> `RESET` 不软复位对主机其实是好事（会话中途不断链），但契约页必须写清。
+> 其余两处见上表与文末 §11。
 
 ### 5.2 配置类 `0x02xx`
 
@@ -499,7 +497,8 @@ payload = `12 + ceil(count/2) × 3` 字节；主机按 `count` 截断，解出�
 **重试策略**：
 
 1. 幂等命令 → 直接重发
-2. 非幂等（`ARM`）→ 靠设备端 `(seq, CMD, 响应)` 单槽缓存回放（1 s 窗口）
+2. 非幂等（`ARM`）→ 靠设备端 `(seq, CMD, 响应)` 单槽缓存回放（1 s 窗口）；
+   ⚠ **设备端尚未实现**，真机上重试会被重新执行（§11.1）
 3. 超时后**不要立刻重发** → 先清空接收缓冲、重同步链路，再按原 seq 重发
 4. 连续 N 次失败 → 上报链路故障并建议重连
 
@@ -552,7 +551,7 @@ aa 55           SYNC
 | 帧编解码 | 最短帧（LEN=0）、最长帧（LEN=2060，真实满载分片）、各 FLAGS 组合 |
 | 粘包/拆包 | 一次喂 3.5 帧、半个帧、`AA 55` 出现在 payload 内部 |
 | 重同步 | 垃圾字节前缀、CRC 错帧后紧跟正确帧 |
-| 边界值 | `LEN = 0 / 1 / 512 / 2060`（合法边界，见上方 `frames` 表）；**越界**用解析器的重同步用例 `oversized_len_resync`（`LEN = 4096`）—— 向量表里**没有 2061 这一条**，本行此前写错了 |
+| 边界值 | `LEN = 0 / 1 / 512 / 2060`（合法边界，见上方 `frames` 表）；**越界**用解析器的重同步用例 `oversized_len_resync`（`LEN = 4096`）—— 向量表里**没有 2061 这一条** |
 | 数值编码 | i16 负数、u32 最大值、定点缩放字段 |
 | 帧解析 | 未知 CMD 按 LEN 吞帧 |
 | 触发语义 | 状态机各状态下的命令合法性矩阵 |
@@ -561,8 +560,7 @@ aa 55           SYNC
 
 ## 10. 版本演进
 
-- `VER` 只在新增命令时升**次版本**
-- 字段变更走**新 CMD 号** + 升**主版本**
+- 编号与升降级规则见 §5.8：新增命令升**次版本**，字段变更走**新 CMD 号** + 升**主版本**
 - 设备对主版本不符**拒绝非基础命令但仍答 `GET_INFO` / `PING`**
 - 每次协议变更必须同时更新四处（见文首），并由两端跑同一份向量做门禁
 - **CI 门禁**：C 原生向量测试 + `cargo test` + 模拟器回归，三件套全绿才允许合并
@@ -616,9 +614,9 @@ aa 55           SYNC
 > `FAIL [GET_INFO 往返] 软触发未实现…不该声明` 失败（固件断言 249 → 252）。
 > 若将来真的实现软触发 / MINMAX 打包，请同步改回本节与那三条断言。
 >
-> ⚠ **仍未对齐**：主机侧模拟器 `host/crates/sim/src/device.rs:458-469` 仍声明
-> `CAP_TRIG_SOFT` / `CAP_FMT_MINMAX`（还多 `CAP_COUPLING_AC`、`CAP_DIGITAL_I2C`、
-> 以及 I2C 场景下 `CAP_CH_DUAL`），与真机 `caps` 不一致 —— 见 §11.4。
+> ✅ **已对齐（G0，2026-10-24）**：主机侧模拟器默认 `CapsMode::RealDevice`，
+> `GET_INFO.caps` 与真机 `DEV_CAPS` 逐位一致；`CapsMode::IdealSim` 保留完整模拟能力，
+> 仅供模拟器专项测试。见 §11.4。
 
 ### 11.3 契约没写清、而实现已经依赖的
 
@@ -627,36 +625,34 @@ aa 55           SYNC
   改字段时两边都要手改。
 - **`READ_BUFFER` 的越界语义**：`start_sample` 越界回**空分片 + `LAST`**（不是错误），
   `end` 超出窗口则截断；"对未冻结的采集区"回的是 `NO_DATA` 而**不是 `BUSY`**。
-  §5.4 原先写的「越界 → `BAD_PARAM`；未冻结 → `BUSY`」与实现不符，已改。
 - **`GET_STATUS.err_flags` 的位定义**：契约页没定义，实现只用了 bit0（本次采集发生过溢出，
   `proto_task.c:157`）。**建议在 §5.1 补上位定义**。
 - **`ECHO` 的 512 B 上限**：靠接收缓冲隐式限制，不是显式校验。
 
-### 11.4 模拟器与真机的 `caps` 不一致（⚠ 未修）
+### 11.4 模拟器与真机的 `caps` 不一致 —— ✅ 已修（G0，2026-10-24）
 
-`host/crates/sim/src/device.rs:458-469` 的 `GET_INFO.caps` 比真机**多声明 5 项**：
+原问题：`host/crates/sim/src/device.rs` 的 `GET_INFO.caps` 比真机**多声明 5 项**
+（`CAP_TRIG_SOFT` / `CAP_FMT_MINMAX` / `CAP_COUPLING_AC` / `CAP_DIGITAL_I2C` /
+I2C 场景下的 `CAP_CH_DUAL`）。模拟器自述是「复刻真实行为」，但它的 `caps`
+描述的是**它自己会做什么**，不是**真机做得到什么** —— 对着模拟器开发 Agent 时，
+会照着这套 `caps` 规划出真机必然拒绝的动作。
 
-| 位 | 模拟器 | 真机 `DEV_CAPS` | 说明 |
-|---|---|---|---|
-| `CAP_TRIG_SOFT` | ✅ 声明 | ❌ 已摘（`4e165e6`） | 模拟器**实现了**软触发（`device.rs:396-403` 真会 `complete_capture()`） |
-| `CAP_FMT_MINMAX` | ✅ 声明 | ❌ 已摘 | 模拟器**实现了** MINMAX（`device.rs:746` 有编码分支） |
-| `CAP_COUPLING_AC` | ✅ 声明 | ❌ 从不声明 | 模拟器把 `coupling` 当参数收下（`device.rs:580-593`）；真机耦合是手拨开关 SW2 |
-| `CAP_DIGITAL_I2C` | ✅ 声明 | ❌ 从不声明 | 真机数字通路尚未实现（P2） |
-| `CAP_CH_DUAL` | I2C 场景下声明 | ❌ 从不声明 | 模拟器 I2C 场景 `ch_count=2`（`sim/src/lib.rs:368`）；真机 `DEV_CH_COUNT == 1` |
+修法：`SimDevice` 增加 `CapsMode`，**默认 `RealDevice`**：
 
-> **问题**：模拟器自述是「复刻真实行为」（`host/crates/sim/src/lib.rs:1-4`），但它的 `caps`
-> 描述的是**它自己会做什么**，不是**真机做得到什么**。Agent 拿 MCP 工具对着模拟器开发时，
-> 会照着这套 `caps` 规划出真机必然拒绝的动作（`FORCE_TRIGGER` → `ERR_UNSUPPORTED`、
-> MINMAX → `ERR_UNSUPPORTED`、AC 耦合 → 无效）。
->
-> **为什么不跟 §11.2 一起改**：改 `caps` 要同时动行为（否则 `caps` 与实际能力再次不一致），
-> 会波及既存测试 —— `sim/src/lib.rs:244` 调用 `bus.force_trigger()`、
-> `:368` 断言 I2C 场景 `ch_count == 2`。所以这是**独立决定**：
-> 要么让模拟器退化到真机能力（则上述测试要改写），
-> 要么给模拟器加一个「真机模式 / 理想模式」开关。
->
-> 注：主机侧**没有任何代码**按 `caps` 分支决策（`command.rs:78` 只解析、`cli/main.rs:512` 只打印），
-> 所以这是**面向 Agent 的信息真实性**问题，不是主机功能问题。
+| 模式 | `caps` | 用途 |
+|---|---|---|
+| `RealDevice`（默认） | `CAP_TRIG_AUTO \| CAP_TRIG_NORMAL \| CAP_TRIG_SINGLE \| CAP_FMT_PACK12`，与真机逐位一致 | 对着模拟器开发真机 Agent |
+| `IdealSim` | 上述四位 + 软触发 / MINMAX / AC 耦合 / 数字 I2C；双通道场景另加 `CAP_CH_DUAL` | 模拟器专项测试与演示 |
+
+- **行为不变**：模拟器仍实现软触发与 MINMAX，只是默认不再**声明**它们。
+  `sim/src/lib.rs:244` 的 `force_trigger()` 与 `:368` 的 `ch_count == 2` 两个测试
+  继续有效（它们验证行为，不验证 caps）。
+- 新增两条守卫：`default_caps_match_the_real_device` 与
+  `ideal_caps_keep_the_simulator_extra_bits`。
+- **I2C 场景仍是双通道**：`CAP_CH_DUAL` 描述的是真板能力，不是模拟场景的通道数；
+  I2C 解码靠实际通道数，不靠 caps 分支。
+- 注：主机侧没有任何代码按 `caps` 分支决策（见 §11.2），
+  所以这是**面向 Agent 的信息真实性**问题，不是主机功能问题。
 
 ### 11.5 主机侧（host）的对应缺口
 

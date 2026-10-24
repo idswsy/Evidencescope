@@ -76,6 +76,25 @@ impl FaultInjection {
     }
 }
 
+/// `GET_INFO.caps` 的声明口径。
+///
+/// 模拟器自述是「复刻真实行为」，但它的 `caps` 一度描述的是**它自己会做什么**，
+/// 而不是**真机做得到什么** —— 于是对着模拟器开发的 Agent 会规划出真机必然
+/// 拒绝的动作（`FORCE_TRIGGER` / MINMAX / AC 耦合）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapsMode {
+    /// 与真机 `DEV_CAPS` 完全一致（默认）。
+    ///
+    /// 真机只有 `CAP_TRIG_AUTO | CAP_TRIG_NORMAL | CAP_TRIG_SINGLE | CAP_FMT_PACK12`
+    /// 四位；**即使 I2C 场景是双通道，也不声明 `CAP_CH_DUAL`** —— 那描述的是
+    /// 真板的能力，不是模拟场景的通道数。
+    RealDevice,
+    /// 模拟器完整能力：额外声明软触发 / MINMAX / AC 耦合 / 数字 I2C / 双通道。
+    ///
+    /// 只用于模拟器专项测试与演示，不用于「对着它开发真机 Agent」的场景。
+    IdealSim,
+}
+
 /// 设备配置快照。
 #[derive(Debug, Clone)]
 struct Config {
@@ -167,6 +186,9 @@ pub struct SimDevice {
     /// 见 [`SimDevice::set_read_buffer_force_raw16`]。
     force_raw16: bool,
 
+    /// `GET_INFO.caps` 的声明口径，默认 [`CapsMode::RealDevice`]。
+    caps_mode: CapsMode,
+
     /// 故障注入设置。直接赋值即可：
     /// `dev.faults.drop_every_n_frames = 50;`
     pub faults: FaultInjection,
@@ -223,6 +245,7 @@ impl SimDevice {
             next_capture_id: 1,
             dedup: None,
             force_raw16: false,
+            caps_mode: CapsMode::RealDevice,
             faults: FaultInjection::default(),
             frames_sent: 0,
             overrun_samples: 0,
@@ -272,6 +295,28 @@ impl SimDevice {
     /// 设备报告的通道数。
     pub fn channel_count(&self) -> u8 {
         self.scenario.channel_count() as u8
+    }
+
+    /// 设置 `GET_INFO.caps` 的声明口径。
+    ///
+    /// 默认 [`CapsMode::RealDevice`]；只有模拟器专项测试才应切到
+    /// [`CapsMode::IdealSim`]。
+    pub fn set_caps_mode(&mut self, mode: CapsMode) {
+        self.caps_mode = mode;
+    }
+
+    /// 当前 `GET_INFO.caps` 的值。
+    ///
+    /// 抽成方法是为了让「声明什么」只有一处定义，测试也能直接对照。
+    pub fn caps(&self) -> u32 {
+        let mut caps = CAP_TRIG_AUTO | CAP_TRIG_NORMAL | CAP_TRIG_SINGLE | CAP_FMT_PACK12;
+        if self.caps_mode == CapsMode::IdealSim {
+            caps |= CAP_TRIG_SOFT | CAP_COUPLING_AC | CAP_FMT_MINMAX | CAP_DIGITAL_I2C;
+            if self.channel_count() >= 2 {
+                caps |= CAP_CH_DUAL;
+            }
+        }
+        caps
     }
 
     /// 当前状态机状态。测试与诊断用（正常路径应通过 `GET_STATUS` 获取）。
@@ -455,18 +500,7 @@ impl SimDevice {
         p.extend_from_slice(&(MAX_PAYLOAD_TX as u16).to_le_bytes());
         p.extend_from_slice(&(PREFERRED_CHUNK as u16).to_le_bytes());
 
-        let mut caps = 0u32;
-        caps |= 1 << 1; // CAP_TRIG_AUTO
-        caps |= 1 << 2; // CAP_TRIG_NORMAL
-        caps |= 1 << 3; // CAP_TRIG_SINGLE
-        caps |= 1 << 4; // CAP_TRIG_SOFT
-        caps |= 1 << 5; // CAP_COUPLING_AC
-        caps |= 1 << 6; // CAP_FMT_PACK12
-        caps |= 1 << 7; // CAP_FMT_MINMAX
-        caps |= 1 << 9; // CAP_DIGITAL_I2C（LM393 数字通路）
-        if self.channel_count() >= 2 {
-            caps |= 1 << 0; // CAP_CH_DUAL
-        }
+        let caps = self.caps();
         p.extend_from_slice(&caps.to_le_bytes());
 
         debug_assert_eq!(p.len(), 45, "GET_INFO payload 必须是 45 字节");
@@ -1105,5 +1139,40 @@ mod trigger_tests {
     #[test]
     fn empty_input_is_handled() {
         assert_eq!(find_trigger(&[], 2048, true), None);
+    }
+}
+
+#[cfg(test)]
+mod caps_tests {
+    use super::{CapsMode, SimDevice};
+    use crate::waveform::Scenario;
+    use scope_proto::*;
+
+    #[test]
+    fn default_caps_match_the_real_device() {
+        // 默认口径必须与真机 DEV_CAPS 逐位一致：只有四位。
+        let dev = SimDevice::new(Scenario::I2c100k);
+        assert_eq!(dev.channel_count(), 2, "I2C 场景仍是双通道");
+        assert_eq!(
+            dev.caps(),
+            CAP_TRIG_AUTO | CAP_TRIG_NORMAL | CAP_TRIG_SINGLE | CAP_FMT_PACK12,
+            "默认真机口径不得多声明任何一位"
+        );
+        assert_eq!(dev.caps() & CAP_CH_DUAL, 0, "真板只有 1 通道");
+    }
+
+    #[test]
+    fn ideal_caps_keep_the_simulator_extra_bits() {
+        let mut dev = SimDevice::new(Scenario::I2c100k);
+        dev.set_caps_mode(CapsMode::IdealSim);
+        for bit in [
+            CAP_TRIG_SOFT,
+            CAP_COUPLING_AC,
+            CAP_FMT_MINMAX,
+            CAP_DIGITAL_I2C,
+            CAP_CH_DUAL,
+        ] {
+            assert_ne!(dev.caps() & bit, 0, "IdealSim 应保留模拟器完整能力");
+        }
     }
 }

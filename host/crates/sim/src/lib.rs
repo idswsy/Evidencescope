@@ -32,7 +32,7 @@
 pub mod device;
 pub mod waveform;
 
-pub use device::{FaultInjection, SimDevice};
+pub use device::{CapsMode, FaultInjection, SimDevice};
 pub use waveform::{Rng, Scenario, WaveformGen, FULL_SCALE_LSB, MID_LSB};
 
 #[cfg(test)]

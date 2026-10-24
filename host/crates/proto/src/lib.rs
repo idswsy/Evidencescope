@@ -38,6 +38,31 @@ pub const VER_MINOR: u8 = 0;
 /// 线上协议版本字节（高 4 位主 / 低 4 位次）。
 pub const VER: u8 = (VER_MAJOR << 4) | VER_MINOR;
 
+// ── GET_INFO.caps 位掩码 ──────────────────────────────────────────
+//
+// 与 `proto/protocol.h` 的 `CAP_*` **逐位一致**。C 端与 Rust 端各自定义是
+// 历史原因；新增/修改位时必须两处同步（CI 目前只校验协议版本号）。
+/// 支持双通道同步采样。
+pub const CAP_CH_DUAL: u32 = 1 << 0;
+/// 支持自动触发。
+pub const CAP_TRIG_AUTO: u32 = 1 << 1;
+/// 支持普通触发。
+pub const CAP_TRIG_NORMAL: u32 = 1 << 2;
+/// 支持单次触发。
+pub const CAP_TRIG_SINGLE: u32 = 1 << 3;
+/// 支持软触发。
+pub const CAP_TRIG_SOFT: u32 = 1 << 4;
+/// 支持 AC 耦合。
+pub const CAP_COUPLING_AC: u32 = 1 << 5;
+/// 支持 PACK12 波形格式。
+pub const CAP_FMT_PACK12: u32 = 1 << 6;
+/// 支持 MINMAX 波形格式。
+pub const CAP_FMT_MINMAX: u32 = 1 << 7;
+/// 支持设备侧测量。
+pub const CAP_MEAS_ON_DEVICE: u32 = 1 << 8;
+/// 支持数字通路 I2C 解码。
+pub const CAP_DIGITAL_I2C: u32 = 1 << 9;
+
 /// 固定帧头长度：SYNC(2) + VER(1) + FLAGS(1) + SEQ(2) + CMD(2) + LEN(2)。
 pub const HEADER_LEN: usize = 10;
 /// CRC16 字段长度。
