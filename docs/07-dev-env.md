@@ -73,8 +73,7 @@ cd f103-agent-scope
 # ── 2. Rust 上位机测试 ───────────────────────────────
 ./host/run.sh test
 # 期望：所有 test result: ok，0 failed
-#       **不写死条数** —— 这个数字每加一个测试就过期一次，
-#       而且它曾经在 README 和这里各写了一个不同的值（61 / 57）。
+#       **不写死条数** —— 这个数字每加一个测试就过期一次。
 #       判断标准只有一个：所有 test result 都是 ok。
 #       （2026-10-10 实测：不含 GUI 的 workspace 为 302 项，含 GUI 另 84 项 + 5 ignored）
 
@@ -136,8 +135,6 @@ gcc -std=c11 -Iproto -Iproto/build -o /tmp/tv \
     && /tmp/tv
 ```
 
-> 回归：这里从前写的命令是 `gcc -std=c11 -Iproto proto/protocol.c proto/tests/test_vectors.c`
-> —— **照抄一定失败**（`vectors.h: No such file or directory`），少了 `-Iproto/build`。
 4. 调试器选 **DAP-Link**（ST-Link 在 Win11 上可能与 DAPLink 驱动冲突）
 
 ### 烧录方式
@@ -153,26 +150,13 @@ gcc -std=c11 -Iproto -Iproto/build -o /tmp/tv \
 串口经**外接 CH340 模块**接到 USART1，**需要接四根线**。
 详见 [`02-hardware.md`](02-hardware.md) §4 与 [ADR-013](06-decisions.md)。
 
-```
-主力：USART1 + 外接 CH340 模块 → PA9(TX) / PA10(RX)   ← 四根线，交叉接
-备选：USB CDC              → PA11 / PA12          ← 带宽高，但自写 USB device 固件
-🚫 禁止：USART2             → PA2 / PA3            ← 硬冲突（PWM 输出 + 模拟输入）
-```
-
-> 2026-10-04 换板前，核心板没有串口桥，当时的方案是「外接 USB-TTL」。
-> 见 [ADR-009](06-decisions.md) 与取代它的 [ADR-012](06-decisions.md)。
-
 ---
 
 ## 5. 编辑器
 
 ### VS Code 推荐配置
 
-[`.vscode/settings.json`](../.vscode/settings.json) 已经提交进仓库，**别在这里再抄一份** ——
-之前这里贴的那份和实际文件差了好几个键（`${env:HOME}` vs `${env:USERPROFILE}`、
-少了 `targetDir` / `files.exclude` / `[json]` 等），两份各自腐烂。
-
-抄了也对不上，直接看那个文件。其中只有一项值得解释：
+[`.vscode/settings.json`](../.vscode/settings.json) 已经提交进仓库，**别在这里再抄一份** —— 直接看那个文件。其中只有一项值得解释：
 
 **`rust-analyzer.cargo.extraEnv.CARGO_TARGET_DIR`** 指向 `${env:USERPROFILE}/.cargo-target/...`
 —— 理由见坑 #1：`ld.exe` 打不开 CJK 路径。用 `USERPROFILE` 而不是 `HOME`，
@@ -266,6 +250,3 @@ PA12 疑似 1.5 kΩ 硬上拉（`【待测】` —— **这是上一块板的结
 | 上位机 / Agent | git + Rust + Python |
 | 固件 | git + Python + Keil + DAP-Link + MinGW（跑 C 端测试）|
 | 硬件 | git + Python + 立创EDA专业版 + 万用表 |
-
-**所有人都要能跑 `./proto/run_tests.sh`** —— 协议是三方交汇点，
-谁改了协议都必须自己先验证两端一致。

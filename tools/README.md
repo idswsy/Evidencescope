@@ -9,22 +9,9 @@
 
 ### `agent_demo/` —— 用 LLM 的原生工具调用驱动这台示波器
 
-**为什么它在这里**：项目的 P3 验收标准是「Agent 一句话完成一次真实的总线调试」，
-而证明这句话需要一个**可复现**的东西 —— 一段聊天记录证明不了任何事。
-
-它做的事：起一个 `scope-mcp` 子进程，走 `tools/list` 拿到工具 schema，原样转成
-LLM 的工具表，然后跑 `tool_use` ↔ `tool_result` 循环，直到模型给出结论。
-
-```bash
-./host/run.sh build -p scope-mcp
-export DEEPSEEK_API_KEY=...        # 或 ANTHROPIC_API_KEY
-python tools/agent_demo/agent.py
-```
-
-**零依赖** —— 只用 Python 标准库。它同时是一份**说明**：一个 MCP 客户端需要多少代码。
-
-产物是 [`docs/08-agent-walkthrough.md`](../docs/08-agent-walkthrough.md) ——
-一份真实跑出来的实录（不是整理的）。详见该目录的 README。
+P3 验收所用的演示程序。运行方式与已知局限以
+[`agent_demo/README.md`](agent_demo/README.md) 为准；运行实录见
+[`docs/08-agent-walkthrough.md`](../docs/08-agent-walkthrough.md)。
 
 ---
 
@@ -37,7 +24,7 @@ python tools/agent_demo/agent.py
 
 **为什么独立于 `scope-core`**：这个工具要能处理**别人的**数据 ——
 从任意示波器（Rigol / Keysight 等）导出的 CSV，
-不一定是我们的设备抓的。
+不一定是本项目设备抓的。
 
 **行为规范**（出处见 [`NOTICE.md`](../NOTICE.md) §4）：
 

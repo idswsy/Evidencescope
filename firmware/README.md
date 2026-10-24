@@ -1,33 +1,13 @@
 # firmware/ —— STM32F103C8T6 固件
 
-> **当前状态（2026-10-10 实测）**：`App/` 与 `Hardware/` **两层都已实现**，
-> **Keil 工程可编译并链接通过**（ARMCC `V5.06 update 5`，**0 Error / 0 Warning**，
-> Flash 19.02 KB / 64 KB、RAM 18.46 KB / 20 KB）。
-> 剩下的不是"没写"，而是**没上板**：真机采集、2 Mbps 链路与 I2C 数字通路都还没在实板上验证。
+> **当前状态（2026-10-10 实测）**：Keil 工程可编译并链接通过（ARMCC `V5.06 update 5`，
+> **0 Error / 0 Warning**，Flash 19.02 KB / 64 KB、RAM 18.46 KB / 20 KB）。
+> `App/measure.c`、`App/i2c_decode.c`、`Hardware/src/tim_capture.c` 与 `App/ui.c`
+> **尚未创建**；真机采集、2 Mbps 链路与 I2C 数字通路均未在实板上验证。
 >
 > ```bash
 > ./firmware/run_tests.sh      # 不需要板子、不需要 Keil、不需要交叉编译
 > ```
->
-> | 文件 | 状态 |
-> |---|---|
-> | `App/hal.h` | ✅ App 层看到的硬件接口（纯函数指针，无寄存器） |
-> | `App/trigger.c` | ✅ 触发搜索（施密特迟滞状态机，**状态跨块保留**） |
-> | `App/acq.c` | ✅ 采集状态机（ARM → 搜触发 → 收尾 → DONE） |
-> | `App/proto_task.c` | ✅ 命令分发（收字节 → 解析 → 执行 → 应答），17 条命令 |
-> | `App/waveform.c` | ✅ 采集窗 → 100 列上下沿 / Vpp / 频率（纯算术，PC 上可测） |
-> | `App/freq_meter.c` | ✅ 测频的纯算术部分（TIM3 捕获 → Hz） |
-> | `App/local_input.c` | ✅ 编码器正交解码 + 按键消抖 + 事件队列 |
-> | `App/local_policy.c` | ✅ 按键/编码器事件 → 动作（纯策略） |
-> | `App/measure.c` | ⏳ 未实现（设备侧 `MEASURE` 回 `ERR_UNSUPPORTED`） |
-> | `App/i2c_decode.c` | ⏳ 未实现（数字通路，且本板只有一路比较器，见 ADR-010） |
-> | `App/ui.c` | ⏳ 未实现（屏幕渲染在 `Hardware/src/display.c`，现已冻结） |
-> | `Hardware/**` | ✅ 21 个文件已实现（ADC/DMA 采集环、USART 链路、hal 装配、TFT、本机 IO/测频/函数发生器） |
-> | `tests/` | ✅ 7 个测试程序 / **252 项断言**，PC 上跑 |
-> | `MDK-ARM/` | ✅ `synthesize-project.uvprojx` + 构建产物（`.axf` / `.hex` / `.map`） |
->
-> 这一半能先做出来，靠的正是下面那条纪律 —— **`App/` 不碰 HAL，
-> 于是三个人里两个人不拿板子也能干活**。
 
 语言：**C11**。库：HAL 或标准外设库（见下方「库的选择」）。
 
@@ -53,7 +33,7 @@ firmware/
 ├─ run_tests.sh     PC 上编译并运行测试 —— **CI 会跑它**
 │
 ├─ Hardware/        硬件层 —— 唯一允许碰寄存器的地方
-│   ├─ inc/ (11)  src/ (10)   ✅ 已实现，不是空的
+│   ├─ inc/ (11)  src/ (10)   ✅ 21 个文件已实现
 │   ├─ src/adc_dma.c      ✅ TIM4_CC4 → ADC1 → DMA1Ch1 → 8 KB 环
 │   ├─ src/link_uart.c    ✅ USART1 + 外接 CH340（1 KB RX / 2 KB TX 环）
 │   ├─ src/hal_impl.c     ✅ 把 9 个函数指针填进 `hal_t`
@@ -67,9 +47,6 @@ firmware/
 ├─ MDK-ARM/         Keil 工程（`synthesize-project.uvprojx`）—— **已并入，可编译**
 └─ synthesize-project.ioc   CubeMX 工程定义
 ```
-
-> ⚠ **`Hardware/` 的目录形状是 `inc/` + `src/`**（沿用上游），不是平铺的。
-> 上面列表里带 ⏳ 的是本阶段要写的。
 
 ---
 
@@ -109,8 +86,7 @@ x 0..99 y 30..80。坐标逐项对着上游 `TFT_StaticUI` / `TFT_ShowUI` 抄的
 > 它内部先 `TFT_Address_Set(x0, y0, x1-1, y1-1)` 设窗口，再按 `x0..x1-1` 循环写。
 > 画一条"从 x=106 到 x=106"的竖线要传 **`106, 0, 107, 128`**，传 `106, 0, 106, 127`
 > 会得到起点大于终点的退化窗口 —— **`for` 一次都不进，一个像素都不写，
-> 返回 `void`，没有任何错误码**。2026-10-05 上板实测：右侧分隔线与波形区的
-> 两条坐标轴就是这么静默消失的。
+> 返回 `void`，没有任何错误码**。
 >
 > `Hardware/src/display.c` 里用 `fill_rect()` 包了一层**闭区间**接口，
 > **新代码一律用它，不要直接调 `TFT_Fill`**。
@@ -126,7 +102,7 @@ x 0..99 y 30..80。坐标逐项对着上游 `TFT_StaticUI` / `TFT_ShowUI` 抄的
 上游那套「本机采集 + TFT 显示 + 按键/编码器」的完整应用搬到了
 `Hardware/src/scope_ui.c`，**整份代码被 `#if SCOPE_LOCAL_UI` 包着，默认 0**。
 
-为什么不直接删：路线图规定 P1 先不碰屏幕（先用串口把数据链路打通），
+为什么不直接删：路线图规定 P1 先不碰屏幕（先用串口建立数据链路），
 但 P4 要接屏幕时那套逻辑还能用。**留着又不开，就有腐烂的风险** ——
 所以 CI 会带 `-DSCOPE_LOCAL_UI=1` 把它也编一遍（见「固件分层纪律检查」那一 job）。
 
@@ -136,15 +112,10 @@ x 0..99 y 30..80。坐标逐项对着上游 `TFT_StaticUI` / `TFT_ShowUI` 抄的
 ⚠ **它与已冻结的屏幕驱动（`Hardware/src/display.c`，docs/09 §4.4）互斥，不要同时开**，
 理由三条，每一条单独都足以致命：
 
-- 它和我们自己的采集链**抢同一批外设**（ADC1 + DMA1Ch1 + TIM），二者不能同时生效
+- 它与本项目的采集链**抢同一批外设**（ADC1 + DMA1Ch1 + TIM），二者不能同时生效
 - 它定义了 `HAL_ADC_ConvCpltCallback`，与 `Hardware/src/adc_dma.c` 里的**同名，
   两个都编会重定义**
 - 同一块屏会有两套驱动在写
-
-本 ADR-014 之后，屏幕那条路走的是 `display.c`（现已冻结，见 docs/09 §4.4）；`scope_ui.c` 的定位是
-**上游逻辑的存档**（P4 若要参考它的按键/编码器/测频可以回来看）。
-它默认不编，但 CI 会用 `-DSCOPE_LOCAL_UI=1` 编它一遍兜住语法，
-所以不会烂掉。
 
 > ⚠ 上游那三个文件（`main.c` / `main.h` / `gpio.c`）里的**中文注释已经被
 > 不可逆地损坏了**（GBK 字节被当 UTF-8 读坏，文件里只剩 U+FFFD）。不是本仓库
@@ -185,7 +156,6 @@ grep -rn '#include.*\(stm32\|hal_\|gd32\|HAL\)' firmware/App/ && exit 1 || exit 
 | CubeMX 支持 | ✅ 可视化配置 | ❌ |
 | 代码体积 | 大（20–35 KB） | 小（~10 KB） |
 | USB CDC | ✅ 官方例程 | 需移植 |
-| **本项目 64 KB Flash 下的余量** | ⚠️ **紧张** | ✅ 宽松 |
 
 > **实测结论（2026-10-10 核对 `MDK-ARM/synthesize-project/*.build_log.htm` 与 `.map`）**：
 > 本工程用的就是 **HAL**，而上面"20–35 KB"的担心**没有兑现** ——
@@ -194,8 +164,6 @@ grep -rn '#include.*\(stm32\|hal_\|gd32\|HAL\)' firmware/App/ && exit 1 || exit 
 > 只剩约 **1.5 KB** 余量（栈 1 KB + 堆 0.5 KB 都已算在 ZI 里）。
 >
 > 所以：**不必为 Flash 换 F103CB**；加功能前先看 `.map` 的 `Total RW Size`。
-> 另外上面那次构建还**含 `display.c`**（屏幕冻结之前做的）—— 冻结后按 docs/09 §4.4
-> 的实测数字可再省约 448 B RAM。
 >
 > 当前链路是 USART1 + 外接 CH340，**没有 USB CDC**，所以 HAL 的体积里还没算上它；
 > 将来真上 USB CDC 要重新核一遍 Flash/RAM。
@@ -205,13 +173,9 @@ grep -rn '#include.*\(stm32\|hal_\|gd32\|HAL\)' firmware/App/ && exit 1 || exit 
 
 ## 数据链路选型
 
-串口经**外接 CH340 模块**接到 USART1，**需要接四根线**（模块 TX→PA10、模块 RX→PA9、GND↔GND、VCC）。
-
-| 优先级 | 链路 | 引脚 | 需要的额外硬件 |
-|---|---|---|---|
-| **P1 期主力** | USART1 + 外接 CH340 模块 | PA9 (TX) / PA10 (RX) | 四根线，TX/RX **交叉** |
-| **P2 起备选** | USB CDC | PA11 / PA12 | 自写 USB device 固件 |
-| 🚫 **禁用** | ~~USART2~~ | ~~PA2 / PA3~~ | 硬冲突：PA2 = PWM 输出，PA3 = 模拟输入 |
+P1 期主力为 USART1 + 外接 CH340 模块（PA9 / PA10，四根线，TX/RX **交叉**）；
+P2 起 USB CDC（PA11 / PA12）为备选；USART2（PA2 / PA3）与底板硬冲突，禁用。
+完整表见根 [`README.md`](../README.md) §7.1 与 [`docs/02-hardware.md`](../docs/02-hardware.md) §2。
 
 > 核心板**到底有没有**板载桥、以及外接模块的最高可靠波特率，均 `【待核实】`（见 [ADR-013](../docs/06-decisions.md)）。
 > ⚠ **不要同时给核心板 Type-C 与底板 Type-C 供电** —— 双路供电倒灌，见 `docs/02-hardware.md` §9。
@@ -228,7 +192,7 @@ grep -rn '#include.*\(stm32\|hal_\|gd32\|HAL\)' firmware/App/ && exit 1 || exit 
 
 ## 外设分配 ⭐（2026-10-05 拿到真实工程后校正）
 
-**这张表是唯一的依据。** 它曾经是错的，见下面的说明。
+**这张表是唯一的依据。** 早期记载的「TIM3_TRGO → ADC」见下。
 
 | 用途 | 定时器 | 引脚 | 为什么是它 |
 |---|---|---|---|
@@ -237,19 +201,13 @@ grep -rn '#include.*\(stm32\|hal_\|gd32\|HAL\)' firmware/App/ && exit 1 || exit 
 | 微秒时基（`tick_us`） | TIM1（PSC=71 → 1 MHz） | 无 | 需要一个**独立**定时器做 32 位 µs 计数（协议要求约 71.6 分钟回绕）。不启用其输出脚，与 USART1 的 PA9/PA10 不冲突 |
 | 简易函数发生器 | TIM2_CH3 | PA2 | 底板自带，上游保留；P1 不用 |
 
-### ⚠ 这份表曾经是错的 —— 记一笔
+### ⚠ 早期记载的「TIM3_TRGO → ADC」
 
-全仓从 `README.md` 到 `docs/01` 共 9 处写着「**TIM3_TRGO → ADC**」。
-那条路**根本不通**：
+该路径不成立：ADC1 的外部触发源只有
+`T1_CC1 / T1_CC2 / T1_CC3 / T2_CC2 / T3_TRGO / T4_CC4 / EXT_IT11`，
+**没有 `T2_TRGO`，也没有 `T4_TRGO`**；且 PA6 的捕获已占用 TIM3（见上表）。
+2026-10-05 取得真实 CubeMX 工程后按上表校正。
 
-1. ADC1 的外部触发源只有 `T1_CC1 / T1_CC2 / T1_CC3 / T2_CC2 / T3_TRGO / T4_CC4 / EXT_IT11`
-   —— **没有 `T2_TRGO`，也没有 `T4_TRGO`**（凭印象写的话很容易记反）
-2. 而 PA6 的捕获把 TIM3 占死了（见上表）
-
-**这个错误从写下的那天起就存在，只是没有任何东西能证伪它** ——
-直到 2026-10-05 拿到真实的 CubeMX 工程与引脚分配。
-
-> 这是「必须上板/拿真工程才能发现」那类问题的第一例，也是先做硬件的直接回报。
 > **教训：引脚与定时器通道的分配，要以数据手册/厂商头文件为准，不能凭印象。**
 
 ---
@@ -368,17 +326,9 @@ DAP-Link GND  ──  核心板 GND
 ## 上游参考
 
 **固件侧**：外部提供的 `STM32-Oscilloscope` 工作副本（本地目录
-`STM32-Oscilloscope/`，**不含 `.git`**）：
+`STM32-Oscilloscope/`，**不含 `.git`**）。来源、许可状态与待办见
+[`NOTICE.md`](../NOTICE.md) §2。
 
-- 仓库地址与作者：无从考证
-- 许可：**无法核实** —— 该工作副本里没有 LICENSE 文件。文件头目前标注为
-  MulanPSL-2.0，那是从一条**已被否定的**归属推断出来的：用户 2026-10-07
-  明确未使用 Gitee 上的 `chen11232/GD32E230-Oscilloscope`。
-- 来源、取舍与待办见 [`NOTICE.md`](../NOTICE.md) §2
-
-**硬件侧**：立创《简易数字示波器设计（入门版）》，**GPL-3.0**，禁止商业性
-使用。引入其代码时必须保留声明。
-
-**直接复用是允许且推荐的**（这能省掉几周）：屏幕驱动、编码器、按键、
-ADC 初始化都可以从上位工程搬，**但采样架构、触发、协议、数字通路解码必须重写** ——
-上游只做本机采集显示，没有任何对外命令接口。
+**直接复用是允许且推荐的**：屏幕驱动、编码器、按键、ADC 初始化都可以从上位工程搬，
+**但采样架构、触发、协议、数字通路解码必须重写** —— 上游只做本机采集显示，
+没有任何对外命令接口。

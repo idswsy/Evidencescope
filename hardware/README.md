@@ -1,7 +1,7 @@
 # hardware/ —— 硬件资料与改板
 
 > **本目录不放原理图源文件**，因为上游根本没提供。
-> 下面写清楚怎么拿到，以及我们自己的改板放在哪。
+> 下面写清楚怎么拿到，以及本项目的改板放在哪。
 
 ---
 
@@ -11,8 +11,7 @@
 
 - 项目页：<https://oshwhub.com/course-examples/yi-qi-yi-biao-jian-yi-shu-zi-shi-bo-qi-she-ji-cha-jian-ban>
 - 工程 UUID：`5e03b6545745463bb8b64813209ffb8c`
-- 许可：**GPL-3.0**（硬件）；参考代码**只有**文件头标注 MulanPSL-2.0，本仓库**无法核实**
-  （工作副本里没有 LICENSE，仓库地址与作者也无从考证）—— 见 [NOTICE.md](../NOTICE.md) §2
+- 许可：**GPL-3.0**（硬件）；参考代码的许可与来源见 [NOTICE.md](../NOTICE.md) §2
 - 页面明文**禁止商业性使用**
 
 ### ⚠️ 没有可直接下载的原理图/Gerber
@@ -39,7 +38,7 @@
 | PCB焊接辅助工具-简易数字示波器V1.2.html | 7.1 MB | 交互式点选定位器件 |
 | 简易数字示波器-装配图.pdf | 2.6 MB | 装配 |
 
-**这些文件体积大且非我们所有，不入库。** 用脚本重新拉取：
+**这些文件体积大且非本项目所有，不入库。** 用脚本重新拉取：
 
 ```bash
 ./hardware/fetch-upstream.sh
@@ -86,7 +85,7 @@
 
 ---
 
-## 3. 我们自己的改板（mods/）
+## 3. 本项目的改板（mods/）
 
 ### 当前需求：第二路模拟前端
 
@@ -129,7 +128,7 @@
 |---|---|
 | 上游硬件工程 | <https://oshwhub.com/course-examples/yi-qi-yi-biao-jian-yi-shu-zi-shi-bo-qi-she-ji-cha-jian-ban> |
 | 上游开发 wiki（16 节教程） | <https://wiki.lceda.cn/zh-hans/course-projects/microcontroller/32-simple-oscilloscope/introduce.html> |
-| 上游参考代码 | 外部提供的 `STM32-Oscilloscope` 工作副本（**无仓库地址、无 LICENSE**，许可待确认）—— 见 [NOTICE.md](../NOTICE.md) §2 |
+| 上游参考代码 | 外部提供的 `STM32-Oscilloscope` 工作副本 —— 见 [NOTICE.md](../NOTICE.md) §2 |
 | 上一块核心板资料（留档） | <https://wiki.lckfb.com/zh-hans/dkx-stm32f103c8t6/> |
 
 ### B 站视频教程（上游，16 集）

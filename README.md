@@ -241,13 +241,9 @@ AI 分析、故障注入、日志、帮助。
 ./host/run.sh run -p scope-cli -- serial --port COM3 --baud 921600 capture -n 2048 -o wave.csv
 ```
 
-串口默认参数 921600 8N1。`firmware/App/` 的硬件无关层（hal / trigger / acq /
-proto_task / waveform / freq_meter / local_input / local_policy，覆盖 17 条命令）
-已实现并通过 **252 项**断言（7 个测试程序）；`firmware/Hardware/` 的 21 个文件与
-Keil 工程（`synthesize-project.uvprojx`）**也都已实现并可编译**（ARMCC V5.06
-update 5，0 Error / 0 Warning）。**尚未做的是真机验证**，不是"没写"。
-烧录路径与接线见 [firmware/README.md](firmware/README.md)
-与 [docs/02-hardware.md](docs/02-hardware.md) §3。
+串口默认参数 921600 8N1。固件侧编译状态、栈预算与烧录接线见
+[firmware/README.md](firmware/README.md)；真机采集尚未验证。
+接线细节另见 [docs/02-hardware.md](docs/02-hardware.md) §3。
 
 ### 5.4 接入 AI Agent
 
@@ -305,16 +301,14 @@ python tools/agent_demo/agent.py
 只转述 `scope_core::measure`、`scope_core::signal` 与解码器的计算结果，
 不含原始样点数组；上限 8000 字符、64 帧。
 
-信号分类（`core/src/signal.rs`）是 2026-10-06 加入的：直流 / 方波 / 脉冲 /
-阶跃响应 / 正弦 / 调幅 / 噪声，判不出时给出**原因**（「未检出稳定周期」、
-「采样密度不足」…），不硬猜。AI 按「场景」行与「波形形状」段选分析分支，
-非 I2C 波形（PWM、PID 阶跃响应）有专门的诊断指引。
+信号分类见 §2 表 3，实现于 `core/src/signal.rs`。AI 按「场景」行与「波形形状」段
+选分析分支，非 I2C 波形（PWM、PID 阶跃响应）有专门的诊断指引。
 
 请求格式为 Anthropic Messages 格式，经 HTTPS 单发。配置存于用户配置目录
 （Windows：`%APPDATA%\scope-gui\config.json`），**密钥为明文存储**。
 默认端点为 `api.deepseek.com/anthropic/v1/messages`，默认模型 `deepseek-flash`。
 分析在独立线程执行，连接超时 10 s、总超时 60 s、`max_tokens` 8192
-（与 §5.4.4 的会话**共用同一个常量** —— 两处曾经各写一个值，见下）。
+（与 §5.4.4 的会话**共用同一个常量**）。
 响应被服务端按 `max_tokens` 截断时，结论照常显示，但上方会标出「内容不完整」。
 
 #### 5.4.4 GUI「交给 AI 采集」
@@ -328,7 +322,7 @@ python tools/agent_demo/agent.py
 | 参数 | 取值 |
 |---|---|
 | 工具循环上限 | 24 轮 |
-| 单次模型请求 | 8192 tokens（与 §5.4.3 共用同一常量） |
+| 单次模型请求 | 8192 tokens |
 | 单条工具结果上限 | 12000 字符（超出时带说明截断） |
 | LLM 超时 | 180 s |
 | JSON-RPC 超时 | 30 s |
@@ -355,7 +349,7 @@ GUI 按交接快照自动重连设备；运行期间可「终止」；设备收�
 | 阶段 | 目标 | 状态 | 验收标准 |
 |---|---|---|---|
 | P0 | 协议闭环（无硬件） | 完成 | 黄金向量在 C 与 Rust 两端全绿；`sim` 可完成 capture |
-| P1 | 最简硬件闭环 | 固件侧已完成：`App/` 与 `Hardware/` 全部实现、Keil 工程可编译（252 项 PC 断言，0 Error / 0 Warning）；**真机采集未验证** | F103 采 2048 点 → 串口 → CLI 落 CSV → 绘图 |
+| P1 | 最简硬件闭环 | 固件侧可编译（252 项 PC 断言，0 Error / 0 Warning）；**真机采集未验证** | F103 采 2048 点 → 串口 → CLI 落 CSV → 绘图 |
 | P2 | 数字通路 I2C 解码 | 进行中：主机侧完成；**固件侧未开始**（`App/i2c_decode.c` 与边沿时间戳缓冲均未创建） | 100 kHz / 400 kHz / 1 MHz 实总线解码结果与逻辑分析仪一致 |
 | P3 | MCP + Agent | 完成，见 [docs/08](docs/08-agent-walkthrough.md) | Agent 一句话完成「抓一次 I2C 写时序并说明 NACK 原因」 |
 | P4 | 增强 | 进行中：GUI、历史、导出、AI 分析面板已完成；板载屏幕已**冻结**（`display.c` 移出 Keil 工程，代码保留，见 [docs/09](docs/09-realtime-display.md) §4.4）；改板与自动量程未做 | 双通道改板、自动量程、等效时间采样 |
@@ -390,12 +384,9 @@ GUI 按交接快照自动重连设备；运行期间可「终止」；设备收�
 ### 7.2 模拟输入只有一路
 
 底板只有一路模拟输入（BNC → TL072 → **PA3 / ADC_IN3**），而 I2C 解码需要
-SCL 与 SDA 两路同时刻采样。可选方案见 [ADR-010](docs/06-decisions.md)：
-
-1. **改板增加第二路前端** —— 完整的双通道模拟示波器，需改板与打样（P4）。
-2. **单路 ADC + 一路数字** —— P0–P3 采用此方案：一路经 ADC 观察模拟质量，
-   另一路经 LM393 → PA6 输入捕获解码协议。
-3. **纯数字双通路** —— 增加一颗比较器，两路均走定时器捕获，放弃模拟视图。
+SCL 与 SDA 两路同时刻采样。P0–P3 采用「单路 ADC + 一路数字」：一路经 ADC 观察
+模拟质量，另一路经 LM393 → PA6 输入捕获解码协议。其余改板方案与工作量见
+[hardware/README.md](hardware/README.md) §3 与 [ADR-010](docs/06-decisions.md)。
 
 ### 7.3 耦合与量程为机械开关
 

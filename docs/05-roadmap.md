@@ -39,7 +39,7 @@ cd host && cargo test       # Rust 端全部测试
 | 串口链路 + 帧解析 | `firmware/App/proto_task.c` | `PING` / `ECHO` / `GET_INFO` 在真机上通过 | ✅ 已实现，**真机未验** |
 | 主机传输层 | `host/crates/transport-serial/` | 能枚举串口、连接、超时重试 | ✅ |
 | CLI | `host/crates/cli/` | `scope-cli capture -o wave.csv` 能出图 | ✅ |
-| 标定表 | `host/crates/core/src/calib.rs` | 用已知直流电压反推 LSB/V，写进配置文件 —— **主机侧已完成**（见下表）；**真值待上板实测** | ⏳ 待实板 |
+| 标定表 | `host/crates/core/src/calib.rs` | 用已知直流电压反推 LSB/V，写进配置文件；按设备 `uid` 索引，CLI 写入（`scope-cli cal set`），GUI / MCP 只读。**四个前端（CLI / MCP / GUI / 模拟器）全部接上**，未标定时如实标出；**真值待上板实测**（见 `docs/02-hardware.md` §9） | ✅ 主机侧 · ⏳ 真值待上板 |
 
 **已经做掉的部分**（不需要板子，或已在本机完成）：
 
@@ -54,7 +54,6 @@ cd host && cargo test       # Rust 端全部测试
 | 硬件层 | `firmware/Hardware/src/`（10 个源文件 + 11 个头） | ✅ ADC/DMA 采集环、USART 链路、hal 装配、TFT、本机 IO/测频/函数发生器 |
 | Keil 工程 | `firmware/MDK-ARM/synthesize-project.uvprojx` | ✅ 可编译（ARMCC V5.06 update 5，**0 Error / 0 Warning**，Flash 19.02 KB / RAM 18.46 KB） |
 | PC 端测试 | `firmware/run_tests.sh` | ✅ 7 个测试程序 / **252 项断言** |
-| **标定表** | `host/crates/core/src/calib.rs` | ✅ 按设备 `uid` 索引；CLI 写入（`scope-cli cal set`），GUI / MCP 只读。**四个前端全部接上**，未标定时三端都如实标出。⚠ 真值仍需上板实测 —— 见 `docs/02-hardware.md` §9 |
 
 跑法：`./firmware/run_tests.sh` —— **不需要板子、不需要 Keil、不需要交叉编译**，
 CI 里也跑它。这正是那条分层的意义：三个人里两个人不拿板子也能改采集逻辑。

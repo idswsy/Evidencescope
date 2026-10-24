@@ -58,23 +58,14 @@
 
 ### 3.2 PACK12 已实现（2026-10-06）
 
-PACK12 为每样点 1.5 B（2 样点 → 3 B），**载荷减少 25%**。编解码函数 `proto_pack12_pair` / `proto_unpack12_pair` 在 `proto/protocol.h`（两端跑同一份黄金向量）。
+PACK12 为每样点 1.5 B（2 样点 → 3 B），**载荷减少 25%**；编解码函数
+`proto_pack12_pair` / `proto_unpack12_pair` 在 `proto/protocol.h`。格式、奇数 `count`
+约定与「按分片头回显的 `format` 解码（不是按请求值；设备可回别的格式，按请求值解会把
+两种字节当同一种读）」见 `docs/03-protocol.md` §6.4；设备/主机/回归的落实与判据见 §4.3。
 
-- 设备：`cmd_read_buffer` 支持 `FMT_PACK12`，分片头的 `format` 如实回显请求值；奇数 `count` 时末样点与 `0` 凑对（约定见 `docs/03-protocol.md` §6.4）。
-- 主机：`scope-core` 的 `acquire` 请求 PACK12，并按**分片头回显的 `format`** 解码（不是按请求值）——设备有权回别的格式，按请求值解会把两种字节当同一种读。
-- 回归：`firmware/tests/test_proto_task.c` 的 PACK12 往返组（与 `acq_sample` 逐点相等）+ 主机端 `decode_chunk_samples` 单测 + scope-mcp 的「按回显格式解码」端到端测试。
-
-> ~~**遗留缺陷（不在本次范围）**：`DEV_CAPS` 仍宣称 `CAP_FMT_MINMAX`……~~
-> **2026-10-10 已修（`4e165e6`）**：`DEV_CAPS` 摘掉了 `CAP_FMT_MINMAX` 与 `CAP_TRIG_SOFT`
-> 两个做不到的能力位（`cmd_read_buffer` 对 MINMAX 回 `ERR_UNSUPPORTED`、
-> `cmd_force_trigger` 恒回 `ERR_UNSUPPORTED`）。`proto_task.c` 上方那段
-> 「不要声明做不到的能力」的注释（针对 `CAP_CH_DUAL` / `CAP_COUPLING_AC`）**现已守住**，
-> 并在 `test_proto_task.c` 的 GET_INFO 组补了负向断言防回归。
-> 完整对照见 `docs/03-protocol.md` §11.2。
->
-> ⚠ **仅真机侧已修**：主机侧模拟器（`host/crates/sim/src/device.rs`）的 `GET_INFO.caps`
-> 仍是旧的一套（含 `CAP_TRIG_SOFT` / `CAP_FMT_MINMAX` / `CAP_COUPLING_AC` /
-> I2C 场景下的 `CAP_CH_DUAL`），与真机不一致 —— 见 `docs/03-protocol.md` §11.4。
+> `DEV_CAPS` 能力位过度声明已于 2026-10-10 修复（`4e165e6`）；模拟器
+> （`host/crates/sim/src/device.rs`）的 `GET_INFO.caps` 仍与真机不一致（未修），
+> 完整对照见 `docs/03-protocol.md` §11.2 / §11.4。
 
 ---
 
@@ -113,10 +104,8 @@ GUI 增加「连续刷新」开关。打开后 worker 循环执行「采集一�
 | 上位机 | `scope-core` 解包 + `acquire` 请求该格式 | ✅ |
 | 协议 | `docs/03-protocol.md`；黄金向量沿用既有 7 组（含 `0x000`/`0xFFF` 两端极值） | ✅ |
 
-本仓纪律：**改协议 = 改四处（文档 / `.h` / `.rs` / 向量）+ 一次提交**。
-
 - 预期 **32 fps**（帧率数字待真机 + 2 Mbps 实测）
-- 硬判据：**同一份采集，PACK12 解出的样点与 RAW16 逐点相同** —— 已由固件 PACK12 往返组、主机 `decode_chunk_samples` 单测、scope-mcp 端到端回归钉住
+- 硬判据：**同一份采集，PACK12 解出的样点与 RAW16 逐点相同** —— 已由固件 PACK12 往返组（`firmware/tests/test_proto_task.c`）、主机 `decode_chunk_samples` 单测、scope-mcp 端到端回归钉住
 
 ### 4.4 第四步：冻结屏幕代码（已完成 2026-10-06）
 
@@ -158,7 +147,7 @@ GUI 增加「连续刷新」开关。打开后 worker 循环执行「采集一�
 
 | 风险 | 发现方式 | 处置 |
 |---|---|---|
-| **2 Mbps 在杜邦线上不可靠** | 第二步的判据（连续 50 次 capture，`rx_crc_err` 为 0） | 退回 921600，仍有 11 fps |
+| **2 Mbps 在杜邦线上不可靠** | 第二步的判据（连续 50 次 capture，`rx_crc_err` 为 0） | 退回 921600，帧率见 §5 注 |
 | 提速后收包环容差变小（1 KB 仅够 5 ms） | 同上；`rx_dropped` 计数 | 必要时把 `LINK_RX_RING` 加大 |
 | PACK12 解包与 RAW16 不一致 | 已由三处自动化测试钉住（固件往返 / 主机单测 / MCP 端到端），真机剩 CSV 逐点对比 | 视为未完成 |
 | 连续刷新挤占 GUI 响应 | 人工使用 | 开关默认关闭 |

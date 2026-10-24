@@ -96,6 +96,11 @@
 
 下面每一轮的「调用 / 结果」都是脚本落盘的原始记录，没有改写。
 
+> **字段集补注**：以下响应是当时运行的原样记录。此后 `scope_connect` 增加
+> `calibration`，`scope_status` 增加 `link_health` / `uptime_ms` / `tick_us`，
+> `scope_list_captures` 增加 `device_tick_us` / `wall_time` / `expected_samples`；
+> `scope_capture` 与 `scope_measure` 的扩展见第 5 轮、第 7 轮后的补注。
+
 ### 第 1 轮（1.6s）
 
 > *思考：The user has an I2C bus problem. Let me investigate using the tools. Let me start by connecting to a device.  Let me plan: connect to simulator (default i2c_100k), configure, capture, decode I2C. Also maybe try the i2c_nack scenario? But the user's actual situation is "unknown" —…*
@@ -518,12 +523,12 @@
 > **不必去读那句中文**。
 >
 > 标定表见 [`host/crates/core/src/calib.rs`](../host/crates/core/src/calib.rs)
+> 与 [`05-roadmap.md`](05-roadmap.md) 的 P1。
 >
 > **2026-10-06 补注**：`scope_measure` 的响应还多了五个指标
 > （`fall_ns` / `overshoot_pct` / `undershoot_pct` / `high_ns` / `edges`），
 > 经 `metrics` 参数按需请求，不请求不返回 —— 上面这段 JSON 是请求
 > `["vpp","freq","duty","rise"]` 时的原样记录，字段集不再完整。
-> 与 [`05-roadmap.md`](05-roadmap.md) 的 P1。
 
 **调用** `scope_list_captures`
 ```json
@@ -699,10 +704,10 @@
 ```
 </details>
 
-> **2026-10-06 补注**：上面这段 `scope_capture` 响应是**原样记录，不改写**。
+> **2026-10-06 补注**：第 3 轮与本轮的 `scope_capture` 响应都是**原样记录，不改写**。
 > 通道摘要现在多了 `fall_ns` / `overshoot_pct` / `undershoot_pct` / `high_ns`
 > 与 `edges_mid`（实测中点处的跃变数，与 `rising_edges` 那个固定 2048 LSB
-> 的计数器**不同源**）—— 上面这段 JSON 的字段集不再完整。
+> 的计数器**不同源**）—— 这两段 JSON 的字段集不再完整。
 
 ### 第 8 轮（1.8s）
 
@@ -907,9 +912,8 @@ I2C 总线，不是你手焊的那两根线」。**这不是我们教的**，也
 ### ③ 它把「地址 ACK」和「数据 NACK」分清楚了
 
 那次对照里它读出来的是：地址被应答了、**被拒绝的是数据字节**。
-这正是 `has_nack()` 语义修复后才成立的一件事（见第 5 节）——
-在此之前，一笔正常的读会在最后字节被主机 NACK，而解码器会把它报成
-`nack: true`，读起来和"器件拒绝"一模一样。
+这正是 `has_nack()` 语义修复后才成立的一件事：修复前，主机读完最后一个
+字节的收尾 NACK 会被报成 `nack: true`，与器件拒绝无法区分（见第 5 节）。
 
 ---
 
