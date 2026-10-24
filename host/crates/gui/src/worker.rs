@@ -120,7 +120,7 @@ struct WorkerState {
 }
 
 impl WorkerState {
-    /// 在已连接的设备上跑一段操作。
+    /// 在已连接的设备上执行一段操作。
     ///
     /// 存在的意义是把 `self.bus.as_mut()` 的借用**限制在一个表达式内** ——
     /// 直接用 `let Some(bus) = self.bus.as_mut() else { self.fail(..) }` 的话，

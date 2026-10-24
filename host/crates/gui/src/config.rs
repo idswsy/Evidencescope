@@ -130,7 +130,7 @@ pub fn redact(key: &str) -> String {
 /// **只在测试里用。** 生产路径走 [`default_config_path`]（直接调 core）。
 ///
 /// 留着这个包装是因为本文件原有的四条路径解析测试都调它 ——
-/// 改测试去调 core 就把「搬运没有改变行为」那层证据弄丢了。
+/// 改测试去调 core 会使「搬运没有改变行为」的证据失效。
 #[cfg(test)]
 pub fn resolve_config_path(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
     scope_core::persist::resolve_user_path(env, DIR_NAME, FILE_NAME)

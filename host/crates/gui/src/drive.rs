@@ -770,7 +770,7 @@ pub fn run_session(
             }));
         }
 
-        // 一次调用的全部结果**塞进同一条 user 消息**（与 agent.py 一致）
+        // 一次调用的全部结果**并入同一条 user 消息**（与 agent.py 一致）
         messages.push(json!({ "role": "user", "content": results }));
     }
 
@@ -1649,7 +1649,7 @@ mod tests {
         );
 
         assert_eq!(c.channels.len(), 2, "i2c_100k 是双通道");
-        assert_eq!(c.channels[0].len(), 4096, "应当拿到全窗（硬顶就是 4096）");
+        assert_eq!(c.channels[0].len(), 4096, "应当拿到全窗（上限就是 4096）");
         assert!(c.rate_hz > 0, "采样率不该是 0");
         assert!(
             c.channels[0].iter().any(|&v| v > 2048) && c.channels[0].iter().any(|&v| v <= 2048),

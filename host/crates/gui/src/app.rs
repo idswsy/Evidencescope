@@ -779,9 +779,7 @@ impl App {
                         ..scope_core::UartConfig::default()
                     }),
                 };
-                match scope_core::decoder::decode(cap, &req)
-                    .map_err(scope_core::ScopeError::from)
-                {
+                match scope_core::decoder::decode(cap, &req).map_err(scope_core::ScopeError::from) {
                     Ok(d) => {
                         self.note(format!("解码完成：共 {} 帧", d.frame_count()));
                         self.uart_decode = Some(d);
@@ -1010,7 +1008,7 @@ impl eframe::App for App {
 
         // AI 面板：右侧独立一栏。
         //
-        // 为什么不塞进底部的 `detail`：那里已经有测量 + 色标 + 质量 + 交易表，
+        // 为什么不并入底部的 `detail`：那里已经有测量 + 色标 + 质量 + 交易表，
         // 再挤进去只会让两边都难读。右侧栏还有个好处 —— 分析结论可以和波形
         // **并排**看，不用来回滚。
         if self.ai.panel_open {
@@ -1063,29 +1061,13 @@ mod tests {
     #[test]
     fn decode_request_follows_the_selected_protocol() {
         let cfg = I2cDecodeConfig::default();
-        let req = build_decode_request(
-            scope_core::Protocol::I2c,
-            true,
-            false,
-            0,
-            1,
-            &cfg,
-            115_200,
-        )
-        .expect("I2C 有结果时应构造请求");
+        let req = build_decode_request(scope_core::Protocol::I2c, true, false, 0, 1, &cfg, 115_200)
+            .expect("I2C 有结果时应构造请求");
         assert_eq!(req.protocol, scope_core::Protocol::I2c);
         assert!(matches!(req.params, scope_core::DecodeParams::I2c(_)));
 
-        let req = build_decode_request(
-            scope_core::Protocol::Uart,
-            false,
-            true,
-            0,
-            1,
-            &cfg,
-            9600,
-        )
-        .expect("UART 有结果时应构造请求");
+        let req = build_decode_request(scope_core::Protocol::Uart, false, true, 0, 1, &cfg, 9600)
+            .expect("UART 有结果时应构造请求");
         assert_eq!(req.protocol, scope_core::Protocol::Uart);
         assert!(req.channels.is_empty(), "UART 通道留空 = core 自动取通道 0");
         match req.params {
@@ -1136,9 +1118,12 @@ mod tests {
 
         let dir = std::env::temp_dir().join("scope-gui-export-test");
         let path = dir.join("capture_1.csv");
-        let written =
-            export_csv(&path.to_string_lossy(), &cap, &scales).expect("临时目录在项目之外，应允许写入");
-        assert!(written.contains("capture_1.csv"), "应写默认文件名：{written}");
+        let written = export_csv(&path.to_string_lossy(), &cap, &scales)
+            .expect("临时目录在项目之外，应允许写入");
+        assert!(
+            written.contains("capture_1.csv"),
+            "应写默认文件名：{written}"
+        );
         let got = std::fs::read_to_string(&path).expect("应能读回导出文件");
         assert_eq!(
             got,

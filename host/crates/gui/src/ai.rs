@@ -485,7 +485,7 @@ impl AiWorker {
         let tx = self.tx.clone();
         let cancel = self.cancel.clone();
         let ctx = self.ctx.clone();
-        // 闭包里要用一份，起线程失败那条兜底路径也要用一份
+        // 闭包与起线程失败的兜底路径各持一份克隆
         let anchor_for_thread = anchor.clone();
 
         // 上一条线程可能还在跑（阻塞在 ureq 里，打断不了）。
@@ -652,7 +652,7 @@ impl AiState {
         // 「开始分析」按钮重新亮起，而新请求其实还在执行。用户此时再次手动触发，
         // 就会同时存在三个请求，而 req_id 机制本来就是为了避免这种混乱。
         // 这个交错靠读代码看不出来，是被 `a_stale_result_does_not_disturb_
-        // the_new_request` 抓到的。
+        // the_new_request` 截获的。
         if is_current {
             self.awaiting = None;
         }

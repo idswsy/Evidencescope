@@ -60,7 +60,7 @@ pub fn duration_us(cap: &Capture) -> f64 {
 
 /// 把一个通道的画线坐标摊平。
 ///
-/// 返回 `[[时间µs, 电压V], ...]`。**不做降采样** —— F103 的硬顶就是 4096 点，
+/// 返回 `[[时间µs, 电压V], ...]`。**不做降采样** —— F103 的上限为 4096 点，
 /// 直接绘制全量，样点信息无损失；minmax 抽点是给 Agent 省 token 用的，不是给人的。
 pub fn waveform_points(cap: &Capture, ch: usize, scale: &ChannelScale) -> Vec<[f64; 2]> {
     let Some(samples) = cap.samples(ch) else {

@@ -878,7 +878,7 @@ pub fn plot(app: &mut App, ui: &mut egui::Ui) {
             }
         }
         if lo.is_finite() && hi > lo {
-            // 上下各留 10% 边距，最小 0.15 个单位 —— 全平之外的退化由下面兜住
+            // 上下各留 10% 边距，最小 0.15 个单位 —— 全平之外的退化路径由下方分支处理
             let m = ((hi - lo) * 0.1).max(0.15);
             (lo - m, hi + m)
         } else {
@@ -1706,64 +1706,68 @@ fn decode_panel(app: &mut App, ui: &mut egui::Ui) {
             });
             ui.weak("8N1 固定；每比特样点数 < 4 时不出帧");
         } else {
-        // 用下拉框而不是 `DragValue`。后者有个坑：它的 range 在**渲染时就会夹值**，
-        // 而 `add_enabled(false)` 挡不住 —— 没采集时 ch_count=0，范围算成 0..=0，
-        // 会把 sda_channel 从 1 悄悄夹成 0，两条线都指向同一条通道，
-        // 界面看着正常却永远解不出东西。下拉框只可能设成合法值，从根上没有这个问题。
-        let names: Vec<String> = (0..ch_count.max(1))
-            .map(|i| format!("CH{}", i + 1))
-            .collect();
-        let label_of =
-            |idx: usize| -> String { names.get(idx).cloned().unwrap_or_else(|| "—".into()) };
+            // 用下拉框而不是 `DragValue`。后者有个坑：它的 range 在**渲染时就会夹值**，
+            // 而 `add_enabled(false)` 挡不住 —— 没采集时 ch_count=0，范围算成 0..=0，
+            // 会把 sda_channel 从 1 悄悄夹成 0，两条线都指向同一条通道，
+            // 界面看着正常却永远解不出东西。下拉框只可能设成合法值，从根上没有这个问题。
+            let names: Vec<String> = (0..ch_count.max(1))
+                .map(|i| format!("CH{}", i + 1))
+                .collect();
+            let label_of =
+                |idx: usize| -> String { names.get(idx).cloned().unwrap_or_else(|| "—".into()) };
 
-        ui.label("SCL");
-        ui.add_enabled_ui(has_cap, |ui| {
-            egui::ComboBox::from_id_salt("scl_ch")
-                .width(64.0)
-                .selected_text(label_of(app.scl_channel))
-                .show_ui(ui, |ui| {
-                    for (i, n) in names.iter().enumerate() {
-                        ui.selectable_value(&mut app.scl_channel, i, n);
-                    }
-                });
-        });
-        ui.label("SDA");
-        ui.add_enabled_ui(has_cap, |ui| {
-            egui::ComboBox::from_id_salt("sda_ch")
-                .width(64.0)
-                .selected_text(label_of(app.sda_channel))
-                .show_ui(ui, |ui| {
-                    for (i, n) in names.iter().enumerate() {
-                        ui.selectable_value(&mut app.sda_channel, i, n);
-                    }
-                });
-        });
-
-        if ui
-            .add_enabled(ch_count >= 2, egui::Button::new("自动检测"))
-            .on_hover_text("按边沿密度判断哪条是 SCL —— 通道接反时用")
-            .clicked()
-        {
-            let picked = app.capture.as_ref().and_then(|cap| {
-                scope_core::detect_channels(cap, app.decode_cfg.levels, app.decode_cfg.debounce_ns)
+            ui.label("SCL");
+            ui.add_enabled_ui(has_cap, |ui| {
+                egui::ComboBox::from_id_salt("scl_ch")
+                    .width(64.0)
+                    .selected_text(label_of(app.scl_channel))
+                    .show_ui(ui, |ui| {
+                        for (i, n) in names.iter().enumerate() {
+                            ui.selectable_value(&mut app.scl_channel, i, n);
+                        }
+                    });
             });
-            match picked {
-                Some((a, b)) => {
-                    app.scl_channel = a;
-                    app.sda_channel = b;
-                    app.mark_decode_dirty();
-                    app.note(format!("自动检测：SCL=CH{} SDA=CH{}", a + 1, b + 1));
+            ui.label("SDA");
+            ui.add_enabled_ui(has_cap, |ui| {
+                egui::ComboBox::from_id_salt("sda_ch")
+                    .width(64.0)
+                    .selected_text(label_of(app.sda_channel))
+                    .show_ui(ui, |ui| {
+                        for (i, n) in names.iter().enumerate() {
+                            ui.selectable_value(&mut app.sda_channel, i, n);
+                        }
+                    });
+            });
+
+            if ui
+                .add_enabled(ch_count >= 2, egui::Button::new("自动检测"))
+                .on_hover_text("按边沿密度判断哪条是 SCL —— 通道接反时用")
+                .clicked()
+            {
+                let picked = app.capture.as_ref().and_then(|cap| {
+                    scope_core::detect_channels(
+                        cap,
+                        app.decode_cfg.levels,
+                        app.decode_cfg.debounce_ns,
+                    )
+                });
+                match picked {
+                    Some((a, b)) => {
+                        app.scl_channel = a;
+                        app.sda_channel = b;
+                        app.mark_decode_dirty();
+                        app.note(format!("自动检测：SCL=CH{} SDA=CH{}", a + 1, b + 1));
+                    }
+                    None => app.note("自动检测失败：两条线都没有边沿"),
                 }
-                None => app.note("自动检测失败：两条线都没有边沿"),
             }
-        }
-        ui.label("去抖");
-        ui.add(
-            egui::DragValue::new(&mut app.decode_cfg.debounce_ns)
-                .range(0..=10_000u32)
-                .speed(10)
-                .suffix(" ns"),
-        );
+            ui.label("去抖");
+            ui.add(
+                egui::DragValue::new(&mut app.decode_cfg.debounce_ns)
+                    .range(0..=10_000u32)
+                    .speed(10)
+                    .suffix(" ns"),
+            );
         }
 
         if ui.button("重新解码").clicked() {
