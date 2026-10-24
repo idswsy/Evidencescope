@@ -1,10 +1,10 @@
 //! # scope-mcp —— MCP Server（P3 阶段）
 //!
-//! 把示波器能力以 **14 个粗粒度工具**暴露给 AI Agent。
+//! 把示波器能力以 **15 个粗粒度工具**暴露给 AI Agent。
 //!
 //! ## 状态
 //!
-//! 14 个工具**全部实现**（见 `session.rs`）。三种用法：
+//! 15 个工具**全部实现**（见 `session.rs`）。三种用法：
 //! 1. 默认：跑 stdio 上的 MCP server（换行分隔的 JSON-RPC 2.0）
 //! 2. `--list-tools`：打印工具清单与**由参数类型生成的** JSON Schema
 //! 3. `--selftest`：走一遍模拟器，确认命令层可用
@@ -14,7 +14,7 @@
 //!
 //! ## 设计约束（为什么是"粗粒度"）
 //!
-//! 14 个工具 ≈ 14 个**Agent 意图**，而不是 30+ 个逐命令工具。
+//! 15 个工具 ≈ 15 个**Agent 意图**，而不是 30+ 个逐命令工具。
 //! 后者会让工具列表爆炸，且一个意图要多次往返。
 //!
 //! ## 三层 token 防护（硬性，不可协商）
@@ -390,8 +390,17 @@ const TOOLS: &[ToolSpec] = &[
         |s, p| s.measure(&p)
     ),
     tool!(
+        "scope_decode",
+        "统一解码入口：protocol=i2c 解 I2C 帧序列（需 2 通道），protocol=uart 解 UART 8N1 字节流（需 1 通道，真机单通道可用）。波特率必须显式确认（默认 115200）",
+        "主机侧解码（基于 READ_BUFFER 数据）",
+        "总是",
+        ToolAnnotations::READ_ONLY,
+        DecodeArgs,
+        |s, p| s.decode(&p)
+    ),
+    tool!(
         "scope_i2c_decode",
-        "把采集解码为 I2C 帧序列（START/地址/ACK/数据/STOP），返回帧列表与信号质量评估",
+        "把采集解码为 I2C 帧序列（START/地址/ACK/数据/STOP），返回帧列表与信号质量评估。等价于 scope_decode(protocol=i2c)，保留为兼容别名",
         "主机侧解码（基于 READ_BUFFER 数据）",
         "总是",
         ToolAnnotations::READ_ONLY,
@@ -750,23 +759,23 @@ fn selftest() -> Result<()> {
     let mut bus = CommandBus::new(SimDevice::new(Scenario::I2c100k));
     let info = bus.connect()?;
     println!(
-        "[1/5] 连接成功: {} 通道, 上限 {} Hz",
+        "[1/6] 连接成功: {} 通道, 上限 {} Hz",
         info.ch_count, info.rate_max_hz
     );
 
     let actual = bus.set_sample_rate(857_143)?;
-    println!("[2/5] 采样率: 请求 857143 → 实际 {actual} Hz（已量化）");
+    println!("[2/6] 采样率: 请求 857143 → 实际 {actual} Hz（已量化）");
 
     bus.set_trigger(1, 0, 0, 2048, 1024, 1000)?;
     bus.set_acq(0, 1024, 0, 1)?;
-    println!("[3/5] 触发与采集参数已配置");
+    println!("[3/6] 触发与采集参数已配置");
 
     bus.arm()?;
     let ev = bus
         .wait_trigger(std::time::Duration::from_millis(2000))?
         .ok_or_else(|| anyhow::anyhow!("模拟器未产生触发事件"))?;
     let capture_id = u16::from_le_bytes([ev[0], ev[1]]);
-    println!("[4/5] 触发完成: capture_id={capture_id}");
+    println!("[4/6] 触发完成: capture_id={capture_id}");
 
     let mut store = CaptureStore::default();
     let mut cap = scope_core::Capture::new(capture_id, actual, 2, 1024);
@@ -801,10 +810,47 @@ fn selftest() -> Result<()> {
 
     let preview = c.preview(0, 32).unwrap();
     println!(
-        "[5/5] minmax 预览: {} 个桶 (每桶 {} 样点) — 这就是 Agent 默认能看到的粒度",
+        "[5/6] minmax 预览: {} 个桶 (每桶 {} 样点) — 这就是 Agent 默认能看到的粒度",
         preview.y_min.len(),
         preview.bucket
     );
+
+    // ── UART 解码（单通道协议 —— 真机可用的那条解码路径）──
+    let mut uart_bus = CommandBus::new(SimDevice::new(Scenario::Uart115k));
+    uart_bus.connect()?;
+    let uart_rate = uart_bus.set_sample_rate(857_143)?;
+    // UART 空闲是高、起始位是低 → auto 触发即可（起始位下降沿本身就能触发）
+    uart_bus.set_trigger(0, 0, 0, 2048, 0, 1000)?;
+    uart_bus.set_acq(0, 1024, 0, 1)?;
+    uart_bus.arm()?;
+    let ev = uart_bus
+        .wait_trigger(std::time::Duration::from_millis(2000))?
+        .ok_or_else(|| anyhow::anyhow!("UART 场景未产生触发事件"))?;
+    let uart_id = u16::from_le_bytes([ev[0], ev[1]]);
+
+    let payload = uart_bus.read_buffer(uart_id, 0, 1024, 0, 0)?;
+    let mut uart_cap = scope_core::Capture::new(uart_id, uart_rate, 1, 1024);
+    for pair in payload[scope_proto::CHUNK_HEADER_LEN..].chunks_exact(2) {
+        uart_cap.channels[0].push(u16::from_le_bytes([pair[0], pair[1]]));
+    }
+    let req = scope_core::decoder::DecodeRequest {
+        protocol: scope_core::decoder::Protocol::Uart,
+        channels: vec![0],
+        params: scope_core::decoder::DecodeParams::Uart(scope_core::decoder::UartConfig::default()),
+    };
+    let decoded = scope_core::decoder::decode(&uart_cap, &req)?;
+    let bytes = decoded.uart_bytes().unwrap_or_default();
+    let head: Vec<String> = bytes.iter().take(3).map(|b| format!("{b:02X}")).collect();
+    println!(
+        "[6/6] UART 解码: {} 帧（{} 帧 ok），首字节 {}，每比特 {:.2} 样点",
+        decoded.frame_count(),
+        decoded.quality.frame_ok,
+        head.join(" "),
+        decoded.quality.sample_margin.unwrap_or(0.0),
+    );
+    if decoded.frame_count() == 0 {
+        anyhow::bail!("UART 解码一帧都没解出 —— 解码链路坏了");
+    }
     println!();
     println!("自检通过。命令层与模拟器均可用。");
     Ok(())

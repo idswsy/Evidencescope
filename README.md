@@ -250,14 +250,17 @@ AI 分析、故障注入、日志、帮助。
 #### 5.4.1 MCP 服务
 
 `scope-mcp` 是运行在 stdio 上的标准 MCP Server，每行一条 JSON-RPC 消息。
-注册 14 个工具：
+注册 15 个工具：
 
 `list_devices`、`connect`、`disconnect`、`status`、`configure`、`capture`、
-`read_waveform`、`measure`、`i2c_decode`、`list_captures`、`save_capture`、
+`read_waveform`、`measure`、`decode`、`i2c_decode`、`list_captures`、`save_capture`、
 `watch`、`sim_set_scenario`、`debug_raw`。
 
+`scope_decode` 是统一解码入口（`protocol=i2c|uart`；UART 8N1 单通道，真机可用），
+`scope_i2c_decode` 是它的兼容别名。
+
 `scope_debug_raw` 仅在环境变量 `SCOPE_MCP_DEBUG=1` 时注册，故默认 `tools/list`
-返回 13 个。工具的参数 schema 由 Rust 参数类型（schemars）现场生成，
+返回 14 个。工具的参数 schema 由 Rust 参数类型（schemars）现场生成，
 并有测试钉住「schema 声明的字段集等于实现能解析的字段集」。
 
 ```bash

@@ -70,6 +70,8 @@ pub mod defaults {
     pub const ZERO: u64 = 0;
     /// `scope_i2c_decode.debounce_ns`
     pub const DEBOUNCE_NS: u64 = 50;
+    /// `scope_decode` 的 UART 缺省波特率（8N1）。
+    pub const DECODE_BAUD: u64 = 115_200;
     /// `scope_watch.duration_ms`
     pub const WATCH_MS: u64 = 1_000;
     /// `scope_watch.max_points`
@@ -103,6 +105,9 @@ pub mod defaults {
     }
     pub(super) fn debounce_ns() -> Option<u64> {
         Some(DEBOUNCE_NS)
+    }
+    pub(super) fn decode_baud() -> Option<u64> {
+        Some(DECODE_BAUD)
     }
     pub(super) fn watch_ms() -> Option<u64> {
         Some(WATCH_MS)
@@ -520,6 +525,81 @@ pub struct I2cDecodeArgs {
     #[serde(default = "defaults::debounce_ns")]
     #[schemars(range(min = 0, max = defaults::MAX_DEBOUNCE_NS))]
     pub debounce_ns: Option<u64>,
+}
+
+/// `scope_decode` 的协议。
+///
+/// 与 core 的 `scope_core::decoder::Protocol` 对应，但 schema 生成在
+/// 本 crate（core 不依赖 schemars）——枚举值是小写字符串，两个名字
+/// 一一对应，改一处必须改另一处（有测试锁住合法值）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtocolArg {
+    /// I²C 总线（需 2 通道；参数在 `i2c` 对象里）
+    I2c,
+    /// UART 串行异步，8N1（需 1 通道；参数在 `uart` 对象里）
+    Uart,
+}
+
+/// `scope_decode` 的 UART 参数（`protocol = "uart"` 时生效）。
+///
+/// 只暴露 `baud` —— 帧格式固定 8N1，未实现的组合不该出现在 schema 里
+/// 让 Agent 以为可用。
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UartParams {
+    /// 波特率，默认 115200。**没有「自动」**：估错波特率会解出看似合理
+    /// 但全错的字节，自动估计未实现也不猜 —— 客户端必须显式确认波特率
+    #[serde(default = "defaults::decode_baud")]
+    #[schemars(range(min = 1, max = 4_000_000))]
+    pub baud: Option<u64>,
+}
+
+/// `scope_decode` 的 I²C 参数（`protocol = "i2c"` 时生效）。
+///
+/// 语义与 [`I2cDecodeArgs`] 同一套（那是 `scope_i2c_decode` 的别名路径），
+/// 只是去掉了 `capture_id` —— 它在顶层。
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct I2cParams {
+    /// SCL 通道号。与 `sda_channel` 要**么都给要么都不给**，
+    /// 都不给时按边沿密度自动判定（SCL 的边沿更密）
+    #[schemars(range(min = 0, max = 255))]
+    pub scl_channel: Option<u64>,
+    /// SDA 通道号
+    #[schemars(range(min = 0, max = 255))]
+    pub sda_channel: Option<u64>,
+    /// 判为「高」的门限，ADC LSB 整数。与 `vil_lsb` 可以单独给
+    #[schemars(range(min = 0, max = 4095))]
+    pub vih_lsb: Option<u64>,
+    /// 判为「低」的门限，ADC LSB 整数
+    #[schemars(range(min = 0, max = 4095))]
+    pub vil_lsb: Option<u64>,
+    /// 去抖窗口（ns），默认 50。**0 是合法的** —— 表示不去抖
+    #[serde(default = "defaults::debounce_ns")]
+    #[schemars(range(min = 0, max = defaults::MAX_DEBOUNCE_NS))]
+    pub debounce_ns: Option<u64>,
+}
+
+/// `scope_decode`
+///
+/// `protocol = "i2c"` 时给 `i2c` 对象（给了 `uart` 会被拒，反之亦然 ——
+/// 互斥参数显式报错，比静默忽略更能暴露 Agent 的调用错误）。
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DecodeArgs {
+    /// 采集 id，来自 scope_capture / scope_list_captures
+    #[schemars(range(min = 0, max = 65535))]
+    pub capture_id: u64,
+    /// 解码协议
+    pub protocol: ProtocolArg,
+    /// 显式通道号（0 起）。省略时：UART 用通道 0；I²C 忽略本字段
+    /// （用 `i2c.scl_channel` / `i2c.sda_channel`）
+    pub channels: Option<Vec<u64>>,
+    /// UART 参数（`protocol = "uart"` 时生效）
+    pub uart: Option<UartParams>,
+    /// I²C 参数（`protocol = "i2c"` 时生效）
+    pub i2c: Option<I2cParams>,
 }
 
 /// `scope_save_capture` 的导出格式。

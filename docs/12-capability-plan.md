@@ -406,7 +406,7 @@ D3 import ──→ 产出 Capture ──→ 复用 D1/D2 的出口（可并行�
 | `host/crates/core/src/i2c_decode.rs:1040` | `decode_capture` |
 | `host/crates/mcp/src/session.rs:866-906` | 手抠 13 个 JSON 键 |
 | `host/crates/mcp/src/session.rs:932-940` | I2C 解码要求 ≥2 通道 |
-| `host/crates/mcp/src/main.rs:321-438` | 14 个 MCP 工具 |
+| `host/crates/mcp/src/main.rs:321-438` | 15 个 MCP 工具 |
 | `host/crates/sim/src/waveform.rs:143/366/768/1386` | `uart_115k` 场景与真值测试 |
 | `host/crates/sim/src/waveform.rs:300-310` | `next_sample` 索引纯函数 |
 | `firmware/App/proto_task.c:39` | `DEV_CH_COUNT = 1` |

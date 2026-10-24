@@ -18,9 +18,10 @@
 //! 这里没有这个问题。
 
 use crate::params::{
-    defaults, AcqMode, CaptureArgs, ConfigureArgs, ConnectArgs, Coupling, DebugRawArgs,
-    I2cDecodeArgs, MeasureArgs, MetricKind, ReadWaveformArgs, SampleFormat, SaveCaptureArgs,
-    SaveFormat, SimSetScenarioArgs, TransportArg, TriggerEdge, TriggerMode, WatchArgs,
+    defaults, AcqMode, CaptureArgs, ConfigureArgs, ConnectArgs, Coupling, DebugRawArgs, DecodeArgs,
+    I2cDecodeArgs, MeasureArgs, MetricKind, ProtocolArg, ReadWaveformArgs, SampleFormat,
+    SaveCaptureArgs, SaveFormat, SimSetScenarioArgs, TransportArg, TriggerEdge, TriggerMode,
+    WatchArgs,
 };
 use scope_core::acquire::MAX_TIMEOUT_MS;
 use scope_core::i2c_decode::{decode_capture, detect_channels, I2cDecodeConfig, Levels};
@@ -1078,6 +1079,127 @@ impl Session {
         }))
     }
 
+    /// `scope_decode` —— 统一解码入口（I²C 与 UART）。
+    ///
+    /// `protocol = "i2c"` 时组装成 [`I2cDecodeArgs`] 走既有的
+    /// [`Session::i2c_decode`]（别名语义，返回格式不变）；
+    /// `protocol = "uart"` 走 core 的 `decoder::decode`（8N1）。
+    ///
+    /// 互斥对象显式校验：`protocol=uart` 却给了 `i2c` 参数（或反过来）
+    /// 报业务错误而不是静默忽略 —— 混用的调用几乎一定是 Agent 搞错了，
+    /// 静默走默认值会让它拿到「自己没要求的配置下」的结果。
+    pub fn decode(&mut self, p: &DecodeArgs) -> R {
+        let id = capture_id(p.capture_id)?;
+        // 先校验互斥对象（未连设备也要报参数错误，先于「找不到采集」）。
+        match p.protocol {
+            ProtocolArg::I2c => {
+                if p.uart.is_some() {
+                    return Err(ToolError {
+                        message: "协议不匹配：protocol=i2c 不接受 uart 参数".into(),
+                        hint: Some("UART 参数只在 protocol=\"uart\" 时给".into()),
+                    });
+                }
+            }
+            ProtocolArg::Uart => {
+                if p.i2c.is_some() {
+                    return Err(ToolError {
+                        message: "协议不匹配：protocol=uart 不接受 i2c 参数".into(),
+                        hint: Some("I²C 参数只在 protocol=\"i2c\" 时给".into()),
+                    });
+                }
+            }
+        }
+        let cap = self.store.get(id).ok_or_else(|| ToolError {
+            message: format!("找不到采集 {id}"),
+            hint: Some("用 scope_list_captures 看现存采集".into()),
+        })?;
+
+        match p.protocol {
+            ProtocolArg::I2c => {
+                // 别名路径：组装既有参数类型，复用 i2c_decode 的全部校验
+                // 与输出格式（B3 已证明适配层与直连逐项一致）。
+                let i2c = p.i2c.clone().unwrap_or_default();
+                let args = I2cDecodeArgs {
+                    capture_id: p.capture_id,
+                    scl_channel: i2c.scl_channel,
+                    sda_channel: i2c.sda_channel,
+                    vih_lsb: i2c.vih_lsb,
+                    vil_lsb: i2c.vil_lsb,
+                    debounce_ns: i2c.debounce_ns,
+                };
+                self.i2c_decode(&args)
+            }
+            ProtocolArg::Uart => {
+                // 通道：省略用 0（真机只有一路）；显式给则必须恰好 1 个且不越界。
+                let ch = match p.channels.as_deref() {
+                    None | Some([]) => 0usize,
+                    Some([c]) => u8_field(*c, "channels")? as usize,
+                    Some(_) => {
+                        return Err(ToolError {
+                            message: "UART 解码只用 1 个通道，channels 最多给 1 个".into(),
+                            hint: Some("I²C 才需要两条线（用 protocol=\"i2c\"）".into()),
+                        })
+                    }
+                };
+                let baud = narrow::<u32>(
+                    p.uart
+                        .as_ref()
+                        .and_then(|u| u.baud)
+                        .unwrap_or(defaults::DECODE_BAUD),
+                    1,
+                    4_000_000,
+                    "baud",
+                    "波特率（1..=4000000）；欠采样时解码器会拒绝出帧",
+                )?;
+
+                let req = scope_core::decoder::DecodeRequest {
+                    protocol: scope_core::decoder::Protocol::Uart,
+                    channels: vec![ch],
+                    params: scope_core::decoder::DecodeParams::Uart(
+                        scope_core::decoder::UartConfig {
+                            baud,
+                            ..scope_core::decoder::UartConfig::default()
+                        },
+                    ),
+                };
+                let out = scope_core::decoder::decode(cap, &req)
+                    .map_err(ScopeError::from)
+                    .map_err(ToolError::from)?;
+
+                // 帧列表逐条给 —— ok=false 的帧照列（字节不可信，但错误率
+                // 必须可见），不静默丢弃。
+                let frames: Vec<Value> = out
+                    .frames
+                    .iter()
+                    .map(|f| match f {
+                        scope_core::decoder::Frame::Uart(u) => json!({
+                            "index": u.index,
+                            "start_sample": u.start_sample,
+                            "byte": u.byte,
+                            "ok": u.ok,
+                        }),
+                        scope_core::decoder::Frame::I2c(_) => unreachable!("UART 结果"),
+                    })
+                    .collect();
+                Ok(json!({
+                    "schema": "decode/uart-8n1",
+                    "capture_id": id,
+                    "protocol": "uart",
+                    "baud": baud,
+                    "frame_count": out.frame_count(),
+                    "frames": frames,
+                    "bytes": out.uart_bytes(),
+                    "quality": {
+                        "sample_margin": out.quality.sample_margin,
+                        "frame_ok": out.quality.frame_ok,
+                        "frame_errors": out.quality.frame_errors,
+                    },
+                    "warnings": out.warnings.iter().map(|w| w.text()).collect::<Vec<_>>(),
+                }))
+            }
+        }
+    }
+
     /// `scope_list_captures`。
     ///
     /// # 为什么带 `device_tick_us` / `wall_time` / `expected_samples`
@@ -1677,6 +1799,85 @@ mod tests {
         assert_eq!(f["complete"], true, "这一帧是正常收尾的，只是内容被拒了");
         // 从机在，地址对，但这一笔它不收 —— 解码器不该因此判定整条总线不可信
         assert_eq!(v["trustworthy"], true);
+    }
+
+    /// `scope_decode(protocol=uart)`：单通道场景解出真值序列。
+    /// 这是「协议分析在真机上成立」的那条路径 —— 真机只有 1 个通道。
+    #[test]
+    fn scope_decode_uart_decodes_the_sim_scenario() {
+        let mut s = Session::new();
+        s.connect(&args(
+            json!({ "transport": "sim", "sim_scenario": "uart_115k" }),
+        ))
+        .unwrap();
+        let _ = s.capture(&args(json!({}))).unwrap();
+        let v = s
+            .decode(&args(json!({
+                "capture_id": 1,
+                "protocol": "uart",
+                "uart": { "baud": 115200 },
+            })))
+            .unwrap();
+
+        assert_eq!(v["protocol"], "uart");
+        assert_eq!(v["baud"], 115200);
+        assert_eq!(v["schema"], "decode/uart-8n1");
+        let n = v["frame_count"].as_u64().unwrap();
+        assert!(n >= 3, "1024 点应至少解出几帧，实际 {n}");
+        // 首字节必须是真值 0x55（锁定态：采集窗从起始位开始）。
+        assert_eq!(v["bytes"][0], 0x55, "首帧字节：{v}");
+        assert_eq!(v["quality"]["frame_errors"], 0, "正确波特率下零错帧：{v}");
+        assert!(
+            v["quality"]["sample_margin"].as_f64().unwrap() >= 4.0,
+            "欠采样门内必须有 sample_margin"
+        );
+    }
+
+    /// 别名等价：`scope_decode(protocol=i2c)` 与 `scope_i2c_decode`
+    /// 对同一采集给出一致的帧数与字节。
+    #[test]
+    fn scope_decode_i2c_is_a_real_alias() {
+        let mut s = connected();
+        let _ = s.capture(&args(json!({}))).unwrap();
+
+        let via_alias = s.i2c_decode(&args(json!({ "capture_id": 1 }))).unwrap();
+        let via_unified = s
+            .decode(&args(json!({
+                "capture_id": 1,
+                "protocol": "i2c",
+            })))
+            .unwrap();
+
+        assert_eq!(
+            via_alias["frame_count"], via_unified["frame_count"],
+            "别名与统一入口的帧数必须一致"
+        );
+        let a = &via_alias["frames"];
+        let u = &via_unified["frames"];
+        assert_eq!(a, u, "帧列表（含地址、ACK/NACK、字节）必须逐项一致");
+    }
+
+    /// 互斥参数显式报错，不静默忽略 —— 混用几乎一定是调用方的错。
+    #[test]
+    fn scope_decode_rejects_mixed_protocol_params() {
+        let mut s = Session::new();
+        let e = s
+            .decode(&args(json!({
+                "capture_id": 1,
+                "protocol": "uart",
+                "i2c": { "scl_channel": 0 },
+            })))
+            .unwrap_err();
+        assert!(e.message.contains("协议不匹配"), "实测：{}", e.message);
+
+        let e = s
+            .decode(&args(json!({
+                "capture_id": 1,
+                "protocol": "i2c",
+                "uart": { "baud": 9600 },
+            })))
+            .unwrap_err();
+        assert!(e.message.contains("协议不匹配"), "实测：{}", e.message);
     }
 
     #[test]
