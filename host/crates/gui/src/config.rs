@@ -100,7 +100,7 @@ impl std::fmt::Debug for AiConfig {
 /// 把 key 遮成 `sk-1***abcd` 这种可辨认但不可用的形式。
 ///
 /// 保留首尾各几个字符是有用的：用户能看出「我用的是哪个 key」，
-/// 但看不出完整内容。太短就整个遮掉，免得遮了等于没遮。
+/// 但看不出完整内容。过短则全部遮蔽，否则遮蔽无效。
 pub fn redact(key: &str) -> String {
     let k = key.trim();
     if k.is_empty() {
@@ -279,7 +279,7 @@ mod tests {
     /// 现在两处共用一个常量，且这条测试钉住它的值。
     #[test]
     fn the_refusal_message_names_what_was_being_written() {
-        let cwd = std::env::current_dir().expect("测试要能拿到当前目录");
+        let cwd = std::env::current_dir().expect("测试需要获取当前目录");
         let target = cwd.join("scope-gui-must-never-be-written.json");
 
         let err = save(&target, &AiConfig::default()).expect_err("仓库目录内必须拒写");

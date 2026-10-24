@@ -2,7 +2,7 @@
 //!
 //! # 为什么是子进程而不是进程内
 //!
-//! 真机串口**独占**（`docs/07-dev-env.md:232`：GUI 占着 COM7 时 `scope-mcp`
+//! 真机串口**独占**（`docs/07-dev-env.md:232`：GUI 占用 COM7 时 `scope-mcp`
 //! 打不开同一个口），模拟器则每个进程各建一台（`Transport::sim()`）。
 //! 所以同一时刻只能有一个设备持有者 —— 要么 GUI，要么子进程。
 //!
@@ -17,14 +17,14 @@
 //! 1. **找 `scope-mcp` 可执行文件** —— 按 `current_exe()` 同级找，
 //!    不按 cwd（GUI 的 cwd 与仓库根不同）
 //! 2. **stdio JSON-RPC 客户端** —— 起进程、发请求、读响应，外加把所有
-//!    「看似可运行但会卡死」的地方堵上（见 [`McpProcess`] 的说明）
+//!    对「看似可运行但会阻塞」的位置逐一设防（见 [`McpProcess`] 的说明）
 //! 3. **工具循环** —— 移植自 `tools/agent_demo/agent.py`，那是一个已验证可用的
 //!    参考实现；但它有几处做法**不能照抄**，逐条写在 [`run_session`] 上面
 //!
 //! # 显示由 GUI 自己镜像，不用 AI 的读数
 //!
 //! AI 可能只看统计量**根本不读样点**（那屏幕就是空白的）；真读时 4096 点的
-//! JSON 又会被 [`RESULT_CHAR_CAP`] 截断，半截样点喂进上下文 ——
+//! JSON 又会被 [`RESULT_CHAR_CAP`] 截断，不完整样点进入上下文 ——
 //! **既烧 token 又误导模型**。
 //!
 //! 所以镜像由 GUI 自己做：每轮工具执行完调一次 `scope_list_captures`，
@@ -45,7 +45,7 @@ use serde_json::{json, Value};
 use crate::ai::AiError;
 use crate::config::AiConfig;
 
-/// 单次工具结果喂给模型时的字符上限。
+/// 单次工具结果送入模型时的字符上限。
 ///
 /// 与 `tools/agent_demo/agent.py` 的 `RESULT_CHAR_CAP` 一致。
 ///
@@ -62,7 +62,7 @@ pub const MAX_TURNS: usize = 24;
 
 /// 单次 MCP 请求的等待上限。
 ///
-/// ⚠ **`agent.py` 这里是没有超时的**（阻塞死等）。照抄的话，子进程一旦卡住
+/// ⚠ **`agent.py` 这里是没有超时的**（阻塞且无超时等待）。照抄的话，子进程一旦卡住
 /// 就再也回不来 —— 而它跑在一条专用线程上，用户只能看着界面转圈。
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -124,7 +124,7 @@ pub fn find_scope_mcp() -> Result<PathBuf, AiError> {
                 .join(" 或 ")
         ),
         "与本程序放在同一目录即可（通常是 host/target/debug/）—— \
-         由 ./host/run.sh run -p scope-gui 启动时自动就位",
+         由 ./host/run.sh run -p scope-gui 启动时自动准备就绪",
     ))
 }
 
@@ -151,7 +151,7 @@ pub fn parse_line(line: &str) -> Option<Value> {
 ///
 /// 没有 `id` 的（通知）直接跳过；有 `id` 但对不上的**报错** ——
 /// 本实现一次只发送一条请求，出现别的 id 就是协议出问题了，静默收下会让
-/// 调用方拿着别人的结果当自己的。
+/// 调用方将其他请求的结果当作当前结果使用。
 pub fn check_id(resp: &Value, want: u64) -> Result<bool, AiError> {
     match resp.get("id") {
         None => Ok(false), // 通知，跳过
@@ -211,11 +211,11 @@ pub fn rebuild_capture(meta: &Value, channels: Vec<Vec<u16>>) -> Result<Capture,
 
 /// 一个 `scope-mcp` 子进程，加一条 stdio JSON-RPC 通道。
 ///
-/// # 与 `agent.py` 的三处不同（都是「看似可运行但会卡死」的坑）
+/// # 与 `agent.py` 的三处不同（均为「看似可运行但会阻塞」的缺陷）
 ///
 /// 1. **stderr 要排空。** `agent.py` 把它接进管道却从不读 —— 子进程往 stderr
 ///    写够一个管道缓冲就**永久阻塞**。这里单开一条线程读掉。
-/// 2. **读要有超时。** `agent.py` 是阻塞死等。这里把 stdout 交给一条读线程，
+/// 2. **读要有超时。** `agent.py` 为阻塞无限等待。这里把 stdout 交给一条读线程，
 ///    请求方 `recv_timeout` —— 子进程卡住时能报错而不是陪着一起卡。
 /// 3. **非法行要跳过、id 要校验**（见 [`parse_line`] / [`check_id`]）。
 pub struct McpProcess {
@@ -434,7 +434,7 @@ impl Mirrored {
         //
         // 第一版这里是 `return Ok(Vec::new())` —— 于是「拉不到波形」与
         // 「确实还没有采集」表现完全一样：屏幕空白，而没有任何线索。
-        // 静默降级成「什么也没有」正是本项目反复打的那类病。
+        // 静默降级为「无内容」正是本项目反复防范的缺陷类型。
         let parsed = parse_tool_json(&text).ok_or_else(|| {
             AiError::new(
                 format!("list_captures 返回的不是 JSON：{}", first_line(&text)),
@@ -671,7 +671,7 @@ pub fn run_session(
             // 全烧在思考块上，正文与 tool_use 一个都没轮到。
             //
             // 不区分的话，这条路会以 `Finished { text: "" }` 收场，界面显示
-            // 「无分析结果」—— 与「模型认为没什么可说」长得一模一样，而两者
+            // 「无分析结果」—— 与「模型认为无内容可输出」不可区分，而两者
             // 的处置完全相反（前者要缩短证据包重试，后者不必）。这一次会话
             // 的钱已经花掉了，至少要让用户知道它为什么是空的。
             if text.trim().is_empty()
@@ -828,7 +828,7 @@ pub fn to_llm_tools(resp: &Value) -> Value {
 /// 而用户界面上显示的是 **CH1 / CH2（1 起）**。模型如实转述接口编号，
 /// 用户看到的就是「CH0 = SCL」—— **对不上屏幕上那两条泳道**。
 ///
-/// 这是「同一件事两个编号」的老毛病，但两个编号各有理由：
+/// 这是「同一件事两个编号」的历史缺陷，但两个编号各有理由：
 /// 一个是数组下标，一个是给人看的标签。**不通信才是缺陷** ——
 /// 所以规矩写在这里，而不是去改接口的编号。
 ///
@@ -933,7 +933,7 @@ pub struct DriveHandle {
 
 impl DriveHandle {
     /// 排空事件。**先写入 Vec 再处理** —— 与 `worker.rs` / `ai.rs` 同一套纪律，
-    /// 免得在闭包里可变借走 `App`。
+    /// 避免在闭包中可变借用 `App`。
     pub fn drain(&self, mut f: impl FnMut(DriveEvent)) {
         while let Ok(e) = self.events.try_recv() {
             f(e);
@@ -994,7 +994,7 @@ pub fn spawn_session(job: DriveJob, generation: u64, ctx: egui::Context) -> Driv
                 }
             };
 
-            // 把句柄交给 UI —— 在这之前用户点终止是杀不到东西的（还没起）
+            // 把句柄交给 UI —— 在此之前触发终止不会生效（进程尚未启动）
             if let Ok(mut s) = slot.lock() {
                 *s = Some(mcp.child_handle());
             }
@@ -1250,7 +1250,7 @@ mod tests {
         assert!(check_id(&json!({"id": 7}), want).unwrap());
         // 通知（没有 id）→ 跳过，不算错
         assert!(!check_id(&json!({"method": "notifications/x"}), want).unwrap());
-        // 对不上 → 报错。静默收下会让调用方拿着别人的结果当自己的。
+        // 对不上 → 报错。静默接受会使调用方将其他请求的结果当作当前结果。
         let e = check_id(&json!({"id": 8}), want).unwrap_err();
         assert!(
             e.message.contains("7") && e.message.contains("8"),
@@ -1548,7 +1548,7 @@ mod tests {
         let reaped = killer.lock().unwrap().try_wait().expect("try_wait 出错");
         assert!(
             reaped.is_some(),
-            "子进程没有被回收 —— 这就是「关窗留下孤儿占着 COM7」那个形态"
+            "子进程没有被回收 —— 即「关闭窗口遗留孤儿进程占用 COM7」的形态"
         );
         println!(
             "子进程已回收（退出码 {}）",
@@ -1583,7 +1583,7 @@ mod tests {
     ///
     /// 为什么值得单独有一条：真实执行一次完整会话要花费 LLM 的费用，而镜像**不经过
     /// LLM** —— 把它单独拎出来验，既便宜又能定位问题（会话没出图时，
-    /// 一眼就能分清是镜像失效，还是模型压根未读取样点）。
+    /// 即可直接区分是镜像失效，还是模型未读取样点）。
     ///
     /// ```text
     /// ./host/run.sh test -p scope-gui -- --ignored mirror_pulls_a_capture --nocapture
@@ -1657,7 +1657,7 @@ mod tests {
         );
         assert!(
             c.expected_samples > 0,
-            "expected_samples 没拿到 = report.rs 的缺口告警会永久静音"
+            "expected_samples 缺失 = report.rs 的缺口告警将永久静音"
         );
 
         // 再 poll 一次不该重复拉（同一个编号只镜像一次）

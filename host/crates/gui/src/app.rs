@@ -50,7 +50,7 @@ pub struct App {
     pub(crate) connected: bool,
     /// 「连续刷新」：收到一帧后立即采下一帧。默认关（docs/09 §8）。
     /// 连续帧不进历史 —— store 只留最近 16 条（容量由 core 决定），
-    /// 30 fps 连跑几秒就会把用户手动采的记录全顶掉。
+    /// 连续采集数秒即会替换掉用户手动采集的记录。
     pub(crate) continuous: bool,
 
     // ── 期望配置（UI 意图，与真值分开）──
@@ -255,7 +255,7 @@ impl App {
         self.drive.phase.device_is_elsewhere()
     }
 
-    /// 现在能不能把设备交给 AI。
+    /// 当前是否允许把设备交接给 AI。
     pub(crate) fn can_start_drive(&self) -> bool {
         self.connected && !self.is_busy() && !self.drive.phase.is_busy()
     }
@@ -687,7 +687,7 @@ impl App {
                     self.sda_channel = self.sda_channel.min(n - 1);
                 }
                 // 连续帧不进历史 —— store 只留最近 16 条（容量由 core 决定），
-                // 30 fps 连跑几秒就会把用户手动采的记录全顶掉（docs/09 §8）。
+                // 连续采集数秒即会替换掉用户手动采集的记录（docs/09 §8）。
                 if !self.continuous {
                     self.store.push(cap.clone());
                 }
@@ -941,7 +941,7 @@ impl eframe::App for App {
                     scenario: self.scenario,
                 });
             }
-            // 连接失败就一直停在 1 —— 不重试，免得每帧刷屏
+            // 连接失败就一直停在 1 —— 不重试，避免每帧重复输出
             1 if self.connected && !self.is_busy() => {
                 self.demo_stage = 2;
                 self.acquire_in_flight = true;
@@ -985,7 +985,7 @@ impl eframe::App for App {
                 });
             });
         // 详情面板必须自己占一个面板。`Plot::show` 会**占用全部可用高度**，
-        // 直接跟在它后面的东西会被整个挤出屏幕 —— 交易表和色标就是这么消失的。
+        // 直接跟在它后面的内容会被完全移出可视区域 —— 交易表与色标因此不可见。
         //
         // 有采集就显示：**测量对任何信号都适用**，不只是 I2C。里面的解码部分
         // 会自己在通道数 < 2 时让位。
@@ -1009,8 +1009,8 @@ impl eframe::App for App {
         // AI 面板：右侧独立一栏。
         //
         // 为什么不并入底部的 `detail`：那里已经有测量 + 色标 + 质量 + 交易表，
-        // 再挤进去只会让两边都难读。右侧栏还有个好处 —— 分析结论可以和波形
-        // **并排**看，不用来回滚。
+        // 再并入会使两侧都难以阅读。右侧栏的优势 —— 分析结论与波形
+        // **并排**显示，无需来回滚动。
         if self.ai.panel_open {
             egui::Panel::right("ai")
                 .resizable(true)
@@ -1025,7 +1025,7 @@ impl eframe::App for App {
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
-            // 帮助页顶掉波形（不做成浮层 Window —— 0.36 的 Window API 我还没核实过）
+            // 帮助页替换波形显示（不做成浮层 Window —— 0.36 的 Window API 我还没核实过）
             if self.show_help {
                 panels::help_page(self, ui);
             } else {
@@ -1040,7 +1040,7 @@ impl eframe::App for App {
         // ⚠ **先杀 AI 的子进程，再关 worker。**
         //
         // 从前这里只 shutdown worker。而 `scope-mcp` 子进程**不归它管** ——
-        // AI 跑着的时候关窗口，会留下一个**孤儿 `scope-mcp` 一直占着 COM7**，
+        // AI 会话运行期间关闭窗口，会遗留孤儿 `scope-mcp` 进程持续占用 COM7，
         // 下次开程序连不上，而且任务管理器里那个进程看起来跟本程序无关。
         //
         // `terminate()` 内部是 kill + wait：wait 不能省，Windows 上句柄没释放，

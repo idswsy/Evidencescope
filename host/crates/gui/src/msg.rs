@@ -76,7 +76,7 @@ pub enum Request {
 pub enum Update {
     /// 串口枚举结果：`(端口名, 描述, 是否疑似目标)`。
     Ports(Vec<(String, String, bool)>),
-    /// 连接成功。**`state` 是补发一次 `GET_STATUS` 拿到的真值** ——
+    /// 连接成功。**`state` 是补发一次 `GET_STATUS` 获得的真值** ——
     /// `connect()` 自己不发 `GET_STATUS`，缺了它 `guard_config_allowed`
     /// 就没有判据，配置按钮在"已武装"时也不会被拦住。
     Connected {
@@ -117,7 +117,7 @@ pub enum Update {
 /// 把错误拆成 UI 能用的两段：说明 + 自救提示。
 ///
 /// 实现在 core 里（`ScopeError::summary()` / `hint()`）—— GUI 与 MCP 共用一份，
-/// 免得两边的措辞漂移。
+/// 避免两侧的措辞漂移。
 pub fn describe_error(e: &scope_core::ScopeError) -> (String, Option<String>) {
     (e.summary(), e.hint())
 }

@@ -415,7 +415,7 @@ const CTRL_W: f32 = 150.0;
 /// 很难复现，而它们恰恰是最容易写错的地方。
 pub fn faults(app: &mut App, ui: &mut egui::Ui) {
     ui.heading("故障注入");
-    ui.weak("模拟器专用。用来验证错误路径不会把界面卡死。");
+    ui.weak("模拟器专用。用于验证错误路径下界面保持可响应。");
 
     let f = &mut app.faults;
     egui::Grid::new("fault_grid")
@@ -884,7 +884,7 @@ pub fn plot(app: &mut App, ui: &mut egui::Ui) {
         } else {
             // 全平信号（直流）：以信号电平为中心的固定小窗。
             // ⚠ 不能用固定 (-0.3, 0.3)：信号不在 0 V 附近时（比如 0.24 V
-            // 的直流），平线会被压在绘图区边缘贴边（2026-10-07 截图验证）。
+            // 的直流），平线将紧贴绘图区边缘（2026-10-07 截图验证）。
             let center = if lo.is_finite() { lo } else { 0.0 };
             (center - 0.3, center + 0.3)
         }
@@ -979,7 +979,7 @@ pub fn plot(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     // 色标**不在这里**画 —— `Plot::show` 会占用全部可用高度，
-    // 跟在它后面的行会被压成零高，只漏出一排残影。
+    // 其后的行会被压缩为零高度，仅显示一行残影。
     // 唯一的那份在下面 `decode_panel` 里。
 }
 
@@ -1274,7 +1274,7 @@ pub fn ai_panel(app: &mut App, ui: &mut egui::Ui) {
 
     ui.add_space(6.0);
 
-    // ── 交出去 / 自己分析 ──
+    // ── 交接给 AI / 本地分析 ──
     let has_capture = app.capture.is_some();
     let can_start = app.ai.can_start() && has_capture;
     let running = app.ai.is_running();
@@ -1285,7 +1285,7 @@ pub fn ai_panel(app: &mut App, ui: &mut egui::Ui) {
         !running && !driving,
         egui::TextEdit::multiline(&mut app.ai.question)
             .desired_rows(2)
-            .hint_text("示例：看看这条总线上在发生什么"),
+            .hint_text("示例：分析这条总线上当前的总线活动"),
     );
 
     ui.horizontal(|ui| {
@@ -1297,7 +1297,7 @@ pub fn ai_panel(app: &mut App, ui: &mut egui::Ui) {
         } else if !app.ai.cfg.has_key() {
             drive_btn.on_disabled_hover_text("未配置 API 密钥。请在「设置」中填写。")
         } else if driving {
-            drive_btn.on_disabled_hover_text("设备当前由 AI 持握。")
+            drive_btn.on_disabled_hover_text("设备当前由 AI 接管。")
         } else {
             // 可用时也要说明它**做什么**。按钮上只放得下两个字，而它实际
             // 会配置、按需重采并分析，期间设备控件全部停用。
@@ -1338,7 +1338,7 @@ pub fn ai_panel(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
-    // ── 设备在 AI 手上 ──
+    // ── 设备由 AI 接管期间 ──
     if driving {
         ui.add_space(4.0);
         ui.colored_label(
@@ -1348,13 +1348,13 @@ pub fn ai_panel(app: &mut App, ui: &mut egui::Ui) {
 
         // ⚠ 只在 `Running` 阶段给终止。
         //
-        // `Disconnecting` 时会话还没起、句柄还是空的，点了什么也终止不了 ——
-        // 摆一个按下去没反应的按钮比不给更糟。而那个窗口只有约一秒
-        // （断开本身很快），之后就能终止了。
+        // `Disconnecting` 时会话尚未启动、句柄为空，终止操作无效 ——
+        // 显示一个无响应按钮比不提供更差。该窗口期仅约一秒
+        // （断开本身很快），之后即可终止。
         let can_stop = app.drive.phase == crate::drive::DrivePhase::Running;
         if ui
             .add_enabled(can_stop, egui::Button::new("终止"))
-            .on_disabled_hover_text("正在让出设备，会话尚未开始")
+            .on_disabled_hover_text("正在交接设备，会话尚未启动")
             .clicked()
         {
             app.stop_drive();
@@ -1663,7 +1663,7 @@ fn export_answer(app: &mut App, cap: &scope_core::Capture, answer: &crate::ai::A
 fn decode_panel(app: &mut App, ui: &mut egui::Ui) {
     // ★ 色标的**唯一**一份在这里。
     // 不要同时在 `plot()` 末尾再画一次：`Plot::show` 会占用全部可用高度，
-    // 那一份会被压成零高、只漏出一排残影，看起来像界面错位了。
+    // 那一份会被压缩为零高度、仅显示一行残影，看起来像界面错位。
     span_legend(ui);
 
     ui.horizontal(|ui| {

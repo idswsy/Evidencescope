@@ -72,17 +72,17 @@ fn main() -> eframe::Result<()> {
 
     // ── --drive <需求>：**不起窗口**，直接在命令行执行一次「AI 自己配置并采集」 ──
     //
-    // 存在的理由是**把会话本身与界面接线分开验**：出问题时能分清
-    // 是这条路没打通，还是只是界面没接上。
+    // 存在的理由是**把会话本身与界面接线分开验**：出现故障时可区分
+    // 是这条路未打通，还是仅界面未接上。
     //
-    //     ./host/run.sh run -p scope-gui -- --drive "看看这条总线上在发生什么"
+    //     ./host/run.sh run -p scope-gui -- --drive "分析这条总线上当前的总线活动"
     //     ./host/run.sh run -p scope-gui -- --drive "…" --port COM7
     if let Some(pos) = args.iter().position(|a| a == "--drive") {
         let task = args
             .get(pos + 1)
             .filter(|s| !s.starts_with("--"))
             .cloned()
-            .unwrap_or_else(|| "看看这条总线上在发生什么，有没有值得注意的地方".to_string());
+            .unwrap_or_else(|| "分析这条总线上当前的总线活动，并指出值得注意之处".to_string());
         let port = args
             .windows(2)
             .find(|w| w[0] == "--port")
@@ -118,7 +118,7 @@ fn main() -> eframe::Result<()> {
 /// `--drive` 的实现：命令行执行一次完整会话，事件打到 stdout。
 ///
 /// 它是**会话这一侧的验收台** —— 界面还没接上时用它验；
-/// 界面接上之后它仍然有用（出问题时能分清是会话的毛病还是界面的）。
+/// 界面接上之后它仍然有用（出现故障时可区分是会话问题还是界面问题）。
 fn drive_cli(task: &str, port: Option<String>, scenario: Option<Scenario>) -> eframe::Result<()> {
     use drive::{DriveEvent, DriveJob, McpProcess};
     use std::io::Write as _;
