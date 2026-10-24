@@ -92,6 +92,15 @@ pub struct App {
     /// 当前 SCL/SDA 通道选择。
     pub(crate) scl_channel: usize,
     pub(crate) sda_channel: usize,
+    /// 解码协议选择（I2C / UART）。场景切换时给合理默认，用户可改。
+    pub(crate) decode_protocol: scope_core::Protocol,
+    /// UART 波特率。8N1 其余参数固定（复用 [`scope_core::UartConfig`] 语义）；
+    /// 0 会被 core 显式报错，不做隐式推断。
+    pub(crate) uart_baud: u32,
+    /// UART 解码结果。
+    pub(crate) uart_decode: Option<scope_core::DecodedFrames>,
+    /// 用户编辑的 CSV 导出路径；空串 = 用默认 `captures/capture_<id>.csv`。
+    pub(crate) csv_path: String,
 
     // ── UI 态 ──
     /// 正在进行的操作名。
@@ -190,6 +199,10 @@ impl App {
             decode_dirty: AtomicBool::new(false),
             scl_channel: 0,
             sda_channel: 1,
+            decode_protocol: scope_core::Protocol::I2c,
+            uart_baud: 115_200,
+            uart_decode: None,
+            csv_path: String::new(),
 
             busy: None,
             acquire_in_flight: false,
@@ -539,16 +552,24 @@ impl App {
         };
 
         // 证据包统一消费 `DecodedFrames`；GUI 内部仍保留 `I2cDecode`
-        // （画泳道要逐事件，转换一次的成本可忽略）。
-        let frames = self
-            .decode
-            .as_ref()
-            .map(|d| scope_core::to_decoded(d.clone()));
-        let decode_req = self.decode.as_ref().map(|_| scope_core::DecodeRequest {
-            protocol: scope_core::Protocol::I2c,
-            channels: vec![],
-            params: scope_core::DecodeParams::I2c(self.decode_cfg.clone()),
-        });
+        // （画泳道要逐事件，转换一次的成本可忽略）。UART 结果本身就是
+        // `DecodedFrames`，直接克隆。
+        let frames = if self.decode_protocol == scope_core::Protocol::I2c {
+            self.decode
+                .as_ref()
+                .map(|d| scope_core::to_decoded(d.clone()))
+        } else {
+            self.uart_decode.clone()
+        };
+        let decode_req = build_decode_request(
+            self.decode_protocol,
+            self.decode.is_some(),
+            self.uart_decode.is_some(),
+            self.scl_channel,
+            self.sda_channel,
+            &self.decode_cfg,
+            self.uart_baud,
+        );
 
         Some(scope_core::build_evidence(&scope_core::EvidenceInput {
             capture: cap,
@@ -713,34 +734,65 @@ impl App {
         }
         let Some(cap) = self.capture.as_ref() else {
             self.decode = None;
+            self.uart_decode = None;
             return;
         };
 
-        // I2C 解码至少要两条线。单通道采集（正弦 / 方波 / 直流…）**不是错误**，
-        // 只是这个场景没有 I2C 可解 —— 静默跳过。
-        // 回归：之前这里会一路走到 decode_capture 报 InvalidParam，
-        // 于是用户采集正弦波时也会看到一条红字错误。
-        if cap.channels.len() < 2 {
-            self.decode = None;
-            return;
-        }
-
-        let cfg = I2cDecodeConfig {
-            scl_channel: self.scl_channel,
-            sda_channel: self.sda_channel,
-            levels: self.decode_cfg.levels,
-            debounce_ns: self.decode_cfg.debounce_ns,
-        };
-        match scope_core::decode_capture(cap, &cfg) {
-            Ok(d) => {
-                self.note(format!("解码完成：共 {} 帧", d.frame_count()));
-                self.decode = Some(d);
+        match self.decode_protocol {
+            scope_core::Protocol::I2c => {
+                self.uart_decode = None;
+                // I2C 解码至少要两条线。单通道采集（正弦 / 方波 / 直流…）**不是错误**，
+                // 只是这个场景没有 I2C 可解 —— 静默跳过。
+                // 回归：之前这里会一路走到 decode_capture 报 InvalidParam，
+                // 于是用户采集正弦波时也会看到一条红字错误。
+                if cap.channels.len() < 2 {
+                    self.decode = None;
+                    return;
+                }
+                let cfg = I2cDecodeConfig {
+                    scl_channel: self.scl_channel,
+                    sda_channel: self.sda_channel,
+                    levels: self.decode_cfg.levels,
+                    debounce_ns: self.decode_cfg.debounce_ns,
+                };
+                match scope_core::decode_capture(cap, &cfg) {
+                    Ok(d) => {
+                        self.note(format!("解码完成：共 {} 帧", d.frame_count()));
+                        self.decode = Some(d);
+                    }
+                    Err(e) => {
+                        let (text, hint) = crate::msg::describe_error(&e);
+                        self.note(format!("✗ 解码失败：{text}"));
+                        self.last_error = Some((text, hint));
+                        self.decode = None;
+                    }
+                }
             }
-            Err(e) => {
-                let (text, hint) = crate::msg::describe_error(&e);
-                self.note(format!("✗ 解码失败：{text}"));
-                self.last_error = Some((text, hint));
+            scope_core::Protocol::Uart => {
                 self.decode = None;
+                // 通道留空 = core 自动取通道 0；波特率 0 由 core 显式报错。
+                let req = scope_core::DecodeRequest {
+                    protocol: scope_core::Protocol::Uart,
+                    channels: vec![],
+                    params: scope_core::DecodeParams::Uart(scope_core::UartConfig {
+                        baud: self.uart_baud,
+                        ..scope_core::UartConfig::default()
+                    }),
+                };
+                match scope_core::decoder::decode(cap, &req)
+                    .map_err(scope_core::ScopeError::from)
+                {
+                    Ok(d) => {
+                        self.note(format!("解码完成：共 {} 帧", d.frame_count()));
+                        self.uart_decode = Some(d);
+                    }
+                    Err(e) => {
+                        let (text, hint) = crate::msg::describe_error(&e);
+                        self.note(format!("✗ 解码失败：{text}"));
+                        self.last_error = Some((text, hint));
+                        self.uart_decode = None;
+                    }
+                }
             }
         }
     }
@@ -749,6 +801,92 @@ impl App {
     pub(crate) fn mark_decode_dirty(&mut self) {
         self.decode_dirty.store(true, Ordering::Relaxed);
     }
+
+    /// 场景切换时给解码协议一个合理默认（用户可改）：
+    /// `uart_115k` → UART，`i2c_*` → I2C；模拟信号场景保持现状。
+    pub(crate) fn sync_decode_protocol(&mut self) {
+        if let Some(p) = default_protocol_for(self.scenario) {
+            if self.decode_protocol != p {
+                self.decode_protocol = p;
+                self.mark_decode_dirty();
+            }
+        }
+    }
+}
+
+/// 场景 → 解码协议默认。模拟信号场景返回 `None`（保持用户当前选择）。
+fn default_protocol_for(scenario: Scenario) -> Option<scope_core::Protocol> {
+    match scenario {
+        Scenario::Uart115k => Some(scope_core::Protocol::Uart),
+        Scenario::I2c100k | Scenario::I2c400k | Scenario::I2cNack => {
+            Some(scope_core::Protocol::I2c)
+        }
+        _ => None,
+    }
+}
+
+/// 按当前选择构造解码请求 —— `build_evidence` 与测试共用这一份逻辑，
+/// 避免请求形状在两处各写一遍（同物两名缺陷）。
+pub(crate) fn build_decode_request(
+    protocol: scope_core::Protocol,
+    has_i2c: bool,
+    has_uart: bool,
+    scl_channel: usize,
+    sda_channel: usize,
+    decode_cfg: &I2cDecodeConfig,
+    uart_baud: u32,
+) -> Option<scope_core::DecodeRequest> {
+    match protocol {
+        scope_core::Protocol::I2c if has_i2c => Some(scope_core::DecodeRequest {
+            protocol: scope_core::Protocol::I2c,
+            channels: vec![],
+            params: scope_core::DecodeParams::I2c(I2cDecodeConfig {
+                scl_channel,
+                sda_channel,
+                levels: decode_cfg.levels,
+                debounce_ns: decode_cfg.debounce_ns,
+            }),
+        }),
+        scope_core::Protocol::Uart if has_uart => Some(scope_core::DecodeRequest {
+            protocol: scope_core::Protocol::Uart,
+            channels: vec![],
+            params: scope_core::DecodeParams::Uart(scope_core::UartConfig {
+                baud: uart_baud,
+                ..scope_core::UartConfig::default()
+            }),
+        }),
+        _ => None,
+    }
+}
+
+/// 把一次采集导出为 CSV —— 与 CLI / MCP 同一序列化
+/// （`Capture::to_csv`，含首行 `# rate_hz=` 契约）。
+///
+/// 写入前过 [`scope_core::persist::check_writable`] 闸门：
+/// 导出路径不得落入项目目录（当前工作目录），与配置文件的防泄漏语义一致。
+/// 返回写入的完整路径。
+pub(crate) fn export_csv(
+    path: &str,
+    cap: &scope_core::Capture,
+    scales: &scope_core::ScaleSet,
+) -> Result<String, String> {
+    let target = std::path::PathBuf::from(path);
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("无法获取当前工作目录（{e}）。无法确认导出位置安全性，拒绝写入"))?;
+    scope_core::persist::check_writable(&parent, &cwd, "导出的 CSV")?;
+    let body = cap.to_csv(scales.as_slice());
+    std::fs::write(&target, body).map_err(|e| format!("写 CSV 失败：{e}"))?;
+    Ok(target.display().to_string())
+}
+
+/// CSV 导出的默认文件名（用户未改路径时使用）。
+pub(crate) fn default_csv_path(cap: &scope_core::Capture) -> String {
+    format!("captures/capture_{}.csv", cap.id)
 }
 
 impl eframe::App for App {
@@ -913,5 +1051,107 @@ impl eframe::App for App {
             h.terminate();
         }
         self.worker.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A1：协议选择决定 `DecodeRequest` 的形状 —— I2C 带通道配置，
+    /// UART 带波特率（8N1 固定、通道留空自动取 0）。
+    #[test]
+    fn decode_request_follows_the_selected_protocol() {
+        let cfg = I2cDecodeConfig::default();
+        let req = build_decode_request(
+            scope_core::Protocol::I2c,
+            true,
+            false,
+            0,
+            1,
+            &cfg,
+            115_200,
+        )
+        .expect("I2C 有结果时应构造请求");
+        assert_eq!(req.protocol, scope_core::Protocol::I2c);
+        assert!(matches!(req.params, scope_core::DecodeParams::I2c(_)));
+
+        let req = build_decode_request(
+            scope_core::Protocol::Uart,
+            false,
+            true,
+            0,
+            1,
+            &cfg,
+            9600,
+        )
+        .expect("UART 有结果时应构造请求");
+        assert_eq!(req.protocol, scope_core::Protocol::Uart);
+        assert!(req.channels.is_empty(), "UART 通道留空 = core 自动取通道 0");
+        match req.params {
+            scope_core::DecodeParams::Uart(u) => {
+                assert_eq!(u.baud, 9600, "波特率应来自用户输入");
+                assert_eq!(u.data_bits, 8);
+                assert_eq!(u.parity, scope_core::Parity::None);
+                assert_eq!(u.stop_bits, 1);
+            }
+            other => panic!("UART 选择下应是 Uart 参数：{other:?}"),
+        }
+
+        // 没有对应协议的结果时不发请求 —— 证据包的 decode_req 与结果成对。
+        assert!(
+            build_decode_request(scope_core::Protocol::I2c, false, true, 0, 1, &cfg, 115_200)
+                .is_none()
+        );
+    }
+
+    /// C4：场景切换给解码协议合理默认；模拟信号场景保持现状。
+    #[test]
+    fn scenario_switch_defaults_the_decode_protocol() {
+        assert_eq!(
+            default_protocol_for(Scenario::Uart115k),
+            Some(scope_core::Protocol::Uart)
+        );
+        assert_eq!(
+            default_protocol_for(Scenario::I2c100k),
+            Some(scope_core::Protocol::I2c)
+        );
+        assert_eq!(
+            default_protocol_for(Scenario::I2cNack),
+            Some(scope_core::Protocol::I2c)
+        );
+        // 模拟信号场景：None = 保持用户当前选择
+        assert_eq!(default_protocol_for(Scenario::Sine1k3v3), None);
+    }
+
+    /// A2：GUI 导出的 CSV 与 core 的 `Capture::to_csv` 逐字节一致；
+    /// 项目目录（当前工作目录）之内拒绝写入。
+    #[test]
+    fn export_csv_matches_core_to_csv_byte_for_byte() {
+        let mut gen = scope_sim::WaveformGen::new(scope_sim::Scenario::Sine1k3v3, 1);
+        let channels = gen.generate_multi(1, 256, 857_142);
+        let mut cap = scope_core::Capture::new(1, 857_142, 1, 256);
+        cap.channels = channels;
+        let scales = scope_core::ScaleSet::uncalibrated(1);
+
+        let dir = std::env::temp_dir().join("scope-gui-export-test");
+        let path = dir.join("capture_1.csv");
+        let written =
+            export_csv(&path.to_string_lossy(), &cap, &scales).expect("临时目录在项目之外，应允许写入");
+        assert!(written.contains("capture_1.csv"), "应写默认文件名：{written}");
+        let got = std::fs::read_to_string(&path).expect("应能读回导出文件");
+        assert_eq!(
+            got,
+            cap.to_csv(scales.as_slice()),
+            "GUI 导出与 core to_csv 必须逐字节一致"
+        );
+
+        // 闸门：当前工作目录之内拒绝写入（与配置文件同一条 persist 语义）
+        let inside = std::path::Path::new("captures").join("should_fail.csv");
+        assert!(
+            export_csv(&inside.to_string_lossy(), &cap, &scales).is_err(),
+            "项目目录内的导出必须被拒"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -200,6 +200,8 @@ pub fn device(app: &mut App, ui: &mut egui::Ui) {
                             ui.selectable_value(&mut app.scenario, s, s.name());
                         }
                     });
+                // 场景切换给解码协议一个合理默认（uart→UART、i2c*→I2C；用户可改）
+                app.sync_decode_protocol();
             });
             if app.connected
                 && ui
@@ -1101,23 +1103,44 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
 
     ui.horizontal(|ui| {
         ui.strong("测量");
+        // 导出路径可编辑（无文件对话框依赖）；空 = 默认 captures/capture_<id>.csv。
+        // 写入前过 core::persist 闸门 —— 导出不得落入项目目录。
+        let default_path = crate::app::default_csv_path(&cap);
+        let shown = if app.csv_path.is_empty() {
+            default_path.clone()
+        } else {
+            app.csv_path.clone()
+        };
+        ui.add(
+            egui::TextEdit::singleline(&mut app.csv_path)
+                .hint_text(default_path)
+                .desired_width(220.0),
+        );
         if ui
             .button("导出 CSV")
-            .on_hover_text("全量样点落盘（不进界面、不占内存）")
+            .on_hover_text("全量样点写盘（不进界面、不占内存）；与 CLI/MCP 同一序列化")
             .clicked()
         {
-            let path = capture_path(&cap, "csv");
-            match std::fs::write(&path, cap.to_csv(scales.as_slice())) {
-                Ok(()) => app.note(format!("已写出 {path}")),
-                Err(e) => app.note(format!("✗ 写 CSV 失败：{e}")),
+            match crate::app::export_csv(&shown, &cap, &scales) {
+                Ok(p) => app.note(format!("已写出 {p}")),
+                Err(e) => app.note(format!("✗ {e}")),
             }
         }
-        if app.decode.is_some() && ui.button("导出解码结果").clicked() {
-            let text = app.decode.as_ref().map(|d| d.to_text()).unwrap_or_default();
-            let path = capture_path(&cap, "i2c.txt");
-            match std::fs::write(&path, text) {
-                Ok(()) => app.note(format!("已写出 {path}")),
-                Err(e) => app.note(format!("✗ 写解码结果失败：{e}")),
+        // 导出解码结果：按当前协议给文本（I2C=交易表，UART=帧表），与证据包同源。
+        let decode_export = match app.decode_protocol {
+            scope_core::Protocol::I2c => app.decode.as_ref().map(|d| (d.to_text(), "i2c.txt")),
+            scope_core::Protocol::Uart => app
+                .uart_decode
+                .as_ref()
+                .map(|d| (d.uart_text(), "uart.txt")),
+        };
+        if let Some((text, ext)) = decode_export {
+            if ui.button("导出解码结果").clicked() {
+                let path = capture_path(&cap, ext);
+                match std::fs::write(&path, text) {
+                    Ok(()) => app.note(format!("已写出 {path}")),
+                    Err(e) => app.note(format!("✗ 写解码结果失败：{e}")),
+                }
             }
         }
     });
@@ -1653,6 +1676,36 @@ fn decode_panel(app: &mut App, ui: &mut egui::Ui) {
         let ch_count = app.capture.as_ref().map(|c| c.channels.len()).unwrap_or(0);
 
         ui.separator();
+        // 协议选择（A1）：I2C / UART。切换后立即按新协议重算。
+        ui.label("协议");
+        egui::ComboBox::from_id_salt("decode_protocol")
+            .width(64.0)
+            .selected_text(match app.decode_protocol {
+                scope_core::Protocol::I2c => "I2C",
+                scope_core::Protocol::Uart => "UART",
+            })
+            .show_ui(ui, |ui| {
+                let before = app.decode_protocol;
+                ui.selectable_value(&mut app.decode_protocol, scope_core::Protocol::I2c, "I2C");
+                ui.selectable_value(&mut app.decode_protocol, scope_core::Protocol::Uart, "UART");
+                if app.decode_protocol != before {
+                    app.mark_decode_dirty();
+                }
+            });
+
+        if app.decode_protocol == scope_core::Protocol::Uart {
+            // UART：通道自动取 0（DecodeRequest.channels 留空）；
+            // 波特率可调，8N1 其余固定 —— 语义在 core::UartConfig，不在此重复。
+            ui.label("波特率");
+            ui.add_enabled_ui(has_cap, |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut app.uart_baud)
+                        .range(1..=2_000_000u32)
+                        .speed(1000),
+                );
+            });
+            ui.weak("8N1 固定；每比特样点数 < 4 时不出帧");
+        } else {
         // 用下拉框而不是 `DragValue`。后者有个坑：它的 range 在**渲染时就会夹值**，
         // 而 `add_enabled(false)` 挡不住 —— 没采集时 ch_count=0，范围算成 0..=0，
         // 会把 sda_channel 从 1 悄悄夹成 0，两条线都指向同一条通道，
@@ -1711,60 +1764,108 @@ fn decode_panel(app: &mut App, ui: &mut egui::Ui) {
                 .speed(10)
                 .suffix(" ns"),
         );
+        }
 
         if ui.button("重新解码").clicked() {
             app.mark_decode_dirty();
         }
 
-        if let Some(d) = &app.decode {
-            ui.separator();
-            if d.is_untrustworthy() {
-                ui.colored_label(egui::Color32::RED, "结果不可信");
+        match app.decode_protocol {
+            scope_core::Protocol::I2c => {
+                if let Some(d) = &app.decode {
+                    ui.separator();
+                    if d.is_untrustworthy() {
+                        ui.colored_label(egui::Color32::RED, "结果不可信");
+                    }
+                    ui.label(format!("共 {} 帧", d.frame_count()));
+                }
             }
-            ui.label(format!("共 {} 帧", d.frame_count()));
+            scope_core::Protocol::Uart => {
+                if let Some(d) = &app.uart_decode {
+                    ui.separator();
+                    if d.quality.frame_errors > 0 {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!("{} 帧停止位校验失败（字节不可信）", d.quality.frame_errors),
+                        );
+                    }
+                    ui.label(format!("共 {} 帧", d.frame_count()));
+                }
+            }
         }
     });
 
-    let Some(d) = app.decode.clone() else {
-        ui.weak("尚无解码结果。采集一次后会自动解码。");
-        return;
-    };
+    match app.decode_protocol {
+        scope_core::Protocol::I2c => {
+            let Some(d) = app.decode.clone() else {
+                ui.weak("尚无解码结果。采集一次后会自动解码。");
+                return;
+            };
 
-    // 信号质量
-    ui.horizontal_wrapped(|ui| {
-        let q = &d.quality;
-        ui.label(format!("SCL 边沿 {}", q.scl_edges));
-        if let Some(f) = q.scl_freq_hz {
-            ui.separator();
-            ui.label(format!("频率 {:.1} kHz", f as f64 / 1000.0));
-        }
-        if let Some(duty) = q.scl_duty {
-            ui.separator();
-            ui.label(format!("占空比 {:.1}%", duty * 100.0));
-        }
-        ui.separator();
-        ui.label(format!("判决带样点 {}", q.unknown_scl + q.unknown_sda));
-    });
+            // 信号质量
+            ui.horizontal_wrapped(|ui| {
+                let q = &d.quality;
+                ui.label(format!("SCL 边沿 {}", q.scl_edges));
+                if let Some(f) = q.scl_freq_hz {
+                    ui.separator();
+                    ui.label(format!("频率 {:.1} kHz", f as f64 / 1000.0));
+                }
+                if let Some(duty) = q.scl_duty {
+                    ui.separator();
+                    ui.label(format!("占空比 {:.1}%", duty * 100.0));
+                }
+                ui.separator();
+                ui.label(format!("判决带样点 {}", q.unknown_scl + q.unknown_sda));
+            });
 
-    for w in vmodel::warning_lines(&d) {
-        ui.colored_label(egui::Color32::YELLOW, format!("⚠ {w}"));
+            for w in vmodel::warning_lines(&d) {
+                ui.colored_label(egui::Color32::YELLOW, format!("⚠ {w}"));
+            }
+
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt("tx_table")
+                // 横向不收缩 —— 否则 ScrollArea 只占内容那么宽，
+                // 滚动条会站在面板正中间（看起来像一根乱入的竖线）
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    // num_columns 必须与「每行实际放几个单元格」一致。
+                    // 写成 2 但每行只放一个，斑马纹会按两列铺，行首行尾各冒出一块空底色。
+                    // 不用 Grid —— 列对齐已经由 `transaction_summary` 的 format! 做好了，
+                    // 而 Grid 的斑马纹按单元格宽度铺，行长不一时会只盖住右半截。
+                    for line in vmodel::transaction_summary(&d) {
+                        ui.monospace(line);
+                    }
+                });
+        }
+        scope_core::Protocol::Uart => {
+            let Some(d) = app.uart_decode.clone() else {
+                ui.weak("尚无解码结果。采集一次后会自动解码。");
+                return;
+            };
+            ui.horizontal_wrapped(|ui| {
+                let q = &d.quality;
+                ui.label(format!("通过校验 {} 帧", q.frame_ok));
+                ui.separator();
+                ui.label(format!("错误 {} 帧", q.frame_errors));
+                if let Some(m) = q.sample_margin {
+                    ui.separator();
+                    ui.label(format!("每比特样点 {m:.2}"));
+                }
+            });
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt("uart_table")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    // 帧表与告警复用 core 的 `uart_body_text` —— 与证据包同一份
+                    // 文本（帧序号/字节/错误标志），界面不另写第二套措辞。
+                    for line in d.uart_body_text().lines() {
+                        ui.monospace(line);
+                    }
+                });
+        }
     }
-
-    ui.separator();
-    egui::ScrollArea::vertical()
-        .id_salt("tx_table")
-        // 横向不收缩 —— 否则 ScrollArea 只占内容那么宽，
-        // 滚动条会站在面板正中间（看起来像一根乱入的竖线）
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            // num_columns 必须与「每行实际放几个单元格」一致。
-            // 写成 2 但每行只放一个，斑马纹会按两列铺，行首行尾各冒出一块空底色。
-            // 不用 Grid —— 列对齐已经由 `transaction_summary` 的 format! 做好了，
-            // 而 Grid 的斑马纹按单元格宽度铺，行长不一时会只盖住右半截。
-            for line in vmodel::transaction_summary(&d) {
-                ui.monospace(line);
-            }
-        });
 }
 
 #[cfg(test)]

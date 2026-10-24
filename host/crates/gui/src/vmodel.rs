@@ -489,4 +489,35 @@ mod tests {
         assert_eq!(l.vil_lsb, (4095.0f32 * 0.30).round() as u16);
         assert!(l.is_valid());
     }
+
+    /// A1：`uart_115k` 场景解出的字节序必须是已知内容 ——
+    /// `55 0F A5` 循环的首三字节（内容确定，才写得出断言）。
+    /// 帧表渲染与证据包共用 core 的 `uart_body_text`，此处一并钉住。
+    #[test]
+    fn uart_115k_decodes_the_known_byte_sequence() {
+        let mut gen = scope_sim::WaveformGen::new(scope_sim::Scenario::Uart115k, 1);
+        let channels = gen.generate_multi(1, 4096, 857_142);
+        let mut cap = scope_core::Capture::new(1, 857_142, 1, 4096);
+        cap.channels = channels;
+        let req = scope_core::DecodeRequest {
+            protocol: scope_core::Protocol::Uart,
+            channels: vec![],
+            params: scope_core::DecodeParams::Uart(scope_core::UartConfig::default()),
+        };
+        let d = scope_core::decoder::decode(&cap, &req).expect("uart_115k 应能解码");
+        let bytes = d.uart_bytes().expect("UART 结果应有字节序列");
+        assert!(
+            bytes.len() >= 3,
+            "4096 点 @115200 应解出多帧，实际 {} 帧",
+            d.frame_count()
+        );
+        assert_eq!(
+            &bytes[..3],
+            &[0x55, 0x0F, 0xA5],
+            "首三字节必须是已知模式 55 0F A5"
+        );
+        // 界面帧表（与证据包同一份文本）里应出现首字节的行
+        let text = d.uart_body_text();
+        assert!(text.contains("0x55"), "帧表应含首字节 0x55：\n{text}");
+    }
 }
