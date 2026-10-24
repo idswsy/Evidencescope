@@ -1889,7 +1889,7 @@ mod tests {
 
     #[test]
     fn i2c_decode_reports_a_nack() {
-        // README 给 P3 定的验收场景就是「抓一次 I2C 写时序并告诉我**为什么
+        // README 给 P3 定的验收场景就是「采集一次 I2C 写时序并说明**为什么
         // NACK**」，而在此之前模拟器**造不出 NACK** —— `transaction()` 把
         // 应答位写死在每个字节后面。这条测试锁住新补的场景。
         let mut s = Session::new();

@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 采集存储保留的历史条数。
 ///
-/// Agent 可以「引用上一次采集」而不必重抓，但不会无限增长。
+/// Agent 可以「引用上一次采集」而不必重新采集，但不会无限增长。
 pub const DEFAULT_HISTORY: usize = 16;
 
 /// 采集数据的来源。
@@ -30,7 +30,7 @@ pub const DEFAULT_HISTORY: usize = 16;
 /// 从 CSV 导入的采集无法再从调用方的链路参数反推，必须由数据本身记住。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureSource {
-    /// 真机抓的。
+    /// 来自真机采集。
     Device,
     /// 模拟器生成的。
     Simulator,
@@ -54,9 +54,9 @@ pub struct Capture {
     pub channels: Vec<Vec<u16>>,
     /// 触发点在窗内的相对样点号；`None` 表示软件触发或无触发。
     pub trigger_index: Option<u32>,
-    /// 抓取时设备时钟（µs）。
+    /// 采集时设备时钟（µs）。
     pub device_tick_us: u32,
-    /// 抓取时的墙钟时间（Unix 秒），用于 `list_captures` 排序。
+    /// 采集时的墙钟时间（Unix 秒），用于 `list_captures` 排序。
     pub wall_time: u64,
     /// 期间是否发生溢出 —— 带该标志的数据**不得按完整数据处理**。
     pub overrun: bool,
@@ -350,7 +350,7 @@ impl ChannelScale {
     }
 }
 
-/// 采集存储：保留最近 N 次采集，供 Agent 引用而不必重抓。
+/// 采集存储：保留最近 N 次采集，供 Agent 引用而不必重新采集。
 #[derive(Debug)]
 pub struct CaptureStore {
     entries: VecDeque<Capture>,

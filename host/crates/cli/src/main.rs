@@ -1,9 +1,9 @@
 //! # scope-cli —— 命令行上位机
 //!
-//! P1 阶段的验收工具：能接硬件抓波形落 CSV，也能对着模拟器开发。
+//! P1 阶段的验收工具：能连接硬件采集波形并写入 CSV，也能对着模拟器开发。
 //!
 //! ```text
-//! # 没有硬件也能跑
+//! # 没有硬件也能运行
 //! scope-cli sim info
 //! scope-cli sim capture --scenario sine_1k_3v3 -o wave.csv
 //!
@@ -188,7 +188,7 @@ enum Action {
         out: Option<String>,
     },
 
-    /// 抓一次总线并解码出 I2C 帧序列
+    /// 采集一次总线数据并解码出 I2C 帧序列
     I2c {
         /// 波形场景（**仅模拟器有效**）
         #[arg(long, value_enum, default_value_t = ScenarioArg::I2c100k)]
@@ -335,7 +335,7 @@ enum DecodeProtocol {
 impl Action {
     /// 取出本动作隐含的场景；其他动作返回默认场景。
     ///
-    /// 模拟器需要在跑动作之前就把设备建出来，所以得先问动作要场景。
+    /// 模拟器需要在执行动作之前就把设备建出来，所以得先问动作要场景。
     fn scenario_or_default(&self) -> ScenarioArg {
         match self {
             Action::Capture { scenario, .. }
@@ -919,7 +919,7 @@ fn run<P: DevicePort>(port: &mut P, action: Action) -> Result<()> {
             continuous,
             out,
         } => {
-            // 连续采集：跑 `continuous` 次，只有最后一帧打摘要。
+            // 连续采集：执行 `continuous` 次，只有最后一帧打摘要。
             // 失败即停 —— 与 GUI 的「连续刷新」同一语义（docs/09 §8）。
             let start = std::time::Instant::now();
             let mut ok: u32 = 0;
@@ -1254,7 +1254,7 @@ fn decode_uart_capture(
     Ok(())
 }
 
-/// 跑一次完整采集：连接 → 配置 → 武装 → 等触发 → 分片拉取。
+/// 执行一次完整采集：连接 → 配置 → 武装 → 等触发 → 分片拉取。
 ///
 /// `capture` / `i2c` / `measure` / `decode` 四个动作共用 —— 采集逻辑只写一遍，
 /// 免得解码那条路上的分片处理与落盘那条路走出两个版本的 bug。
@@ -1298,8 +1298,8 @@ fn capture_once_with_trigger<D: DevicePort>(
         bus.set_trigger(mode, 0, edge, level, pre, 1000)?;
     }
 
-    // 采集编排在 core 里（`scope_core::acquire`）—— 它替我们处理了
-    // EVENT_TRIGGER 的 18 字节解析、分片上限、以及「没有触发点」的哨兵映射。
+    // 采集编排在 core 里（`scope_core::acquire`）—— EVENT_TRIGGER 的 18 字节解析、
+    // 分片上限、以及「没有触发点」的哨兵映射均由其统一处理。
     // CLI / GUI / MCP 三端共用这一份，不各写一遍。
     let params = AcquireParams {
         samples,

@@ -68,7 +68,7 @@ pub(crate) const MAX_TOKENS: u32 = 8192;
 pub struct AiAnswer {
     /// 模型给出的文字。
     pub text: String,
-    /// 实际用的模型名（服务端回显的，不是我们请求的 —— 可能被路由）。
+    /// 实际用的模型名（由服务端回显，未必等于请求值 —— 可能被路由）。
     pub model: String,
     /// 耗时。
     pub elapsed: Duration,
@@ -309,7 +309,7 @@ pub fn parse_response(
                 "模型未返回文本内容（stop_reason = {}）",
                 stop_reason.unwrap_or("(未给出)")
             ),
-            "若为 max_tokens：整个预算被思考块吃掉了，正文一个字没留下。\
+            "若为 max_tokens：整个预算被思考块消耗，正文未保留任何内容。\
              证据包过长时最容易发生 —— 减小采集点数或缩短提问后重试",
         ));
     }
@@ -345,7 +345,7 @@ pub(crate) fn transport_error_for_drive(e: &ureq::Error) -> AiError {
 
 /// 把 HTTP 错误码翻译成「说明 + 怎么办」。
 fn http_error(status: u16, v: &serde_json::Value) -> AiError {
-    // 服务端自己的说明优先 —— 它比我们猜的准
+    // 以服务端返回的说明为准 —— 优先级高于客户端推断
     let detail = v
         .pointer("/error/message")
         .and_then(|m| m.as_str())
@@ -396,7 +396,7 @@ fn ask(cfg: &AiConfig, evidence: &str, cancel: &AtomicBool) -> Result<AiAnswer, 
         .header("x-api-key", cfg.api_key.trim())
         .header("anthropic-version", "2023-06-01")
         .config()
-        // 4xx/5xx 也走 Ok 分支 —— 我们要读响应体里的错误说明
+        // 4xx/5xx 也走 Ok 分支 —— 需读取响应体里的错误说明
         .http_status_as_error(false)
         .timeout_connect(Some(CONNECT_TIMEOUT))
         .timeout_global(Some(GLOBAL_TIMEOUT))
@@ -529,7 +529,7 @@ impl AiWorker {
         req_id
     }
 
-    /// 排空回执。**收进 Vec 再处理** —— 和 `worker.rs` 一个路子，
+    /// 排空回执。**先写入 Vec 再处理** —— 与 `worker.rs` 同一模式，
     /// 避免在闭包里可变借走 App。
     pub fn drain(&self, mut f: impl FnMut(AiUpdate)) {
         while let Ok(u) = self.rx.try_recv() {
@@ -649,8 +649,8 @@ impl AiState {
         //
         // 回归：这里曾经无条件 `self.awaiting = None`，于是一条**旧请求**的
         // 迟到结果会把**新请求**的运行态一并清掉 —— 界面显示「不在分析」、
-        // 「开始分析」按钮重新亮起，而新请求其实还在飞。用户此时再点一次，
-        // 就有三个请求同时在路上，而 req_id 机制本来就是为了避免这种混乱。
+        // 「开始分析」按钮重新亮起，而新请求其实还在执行。用户此时再次手动触发，
+        // 就会同时存在三个请求，而 req_id 机制本来就是为了避免这种混乱。
         // 这个交错靠读代码看不出来，是被 `a_stale_result_does_not_disturb_
         // the_new_request` 抓到的。
         if is_current {
@@ -1305,7 +1305,7 @@ mod tests {
     /// ./host/run.sh test -p scope-gui -- --ignored measure_real_payload --nocapture
     /// ```
     #[test]
-    #[ignore = "要跑一次真实采集（本地），手动跑"]
+    #[ignore = "需执行一次真实采集（本地），手动执行"]
     fn measure_real_payload() {
         use scope_core::{AcquireParams, CommandBus, EvidenceInput};
 
@@ -1362,7 +1362,7 @@ mod tests {
         );
     }
 
-    /// **真跑一次成功的单发分析 —— 端到端，用真 key，花真钱。**
+    /// **真实执行一次成功的单发分析 —— 端到端，用真 key，花真钱。**
     ///
     /// 手动执行（`--nocapture` 才能看到基线）：
     ///
@@ -1377,7 +1377,7 @@ mod tests {
     /// 分不清是新增部分的 bug 还是主干本来就有的。
     ///
     /// 它也顺带把几件从未一起验过的事串起来：真采集 → 真证据包 → 真 HTTP →
-    /// 真解析 → 真用量。跑出来的数字就是后续的**基线**。
+    /// 真解析 → 真用量。实测得到的数字就是后续的**基线**。
     #[test]
     #[ignore = "要外网 + 真 key + 花钱；手动跑"]
     fn live_single_shot_end_to_end() {

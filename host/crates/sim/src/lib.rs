@@ -9,7 +9,7 @@
 //! - 状态机约束（ARMED 下发配置 → `BUSY`）
 //! - auto 触发约 200 ms 超时强制完成（**没有这条 Agent 会永久阻塞**）
 //! - seq 单槽去重缓存（`ARM` 重试安全）
-//! - 按 64 字节分片吐出，逼出真实的粘包/拆包路径
+//! - 按 64 字节分片输出，覆盖真实的粘包/拆包路径
 //!
 //! ## 故障注入
 //!
@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn oversized_host_payload_is_rejected_locally() {
         // 回归：主机→设备方向的上限是 512 B，比设备发来的 2060 B 小得多。
-        // 不在本地拦下的话，设备解析缓冲（524 B）装不下，会把帧逐字节削掉，
+        // 不在本地拦下的话，超出设备解析缓冲（524 B）容量，会把帧逐字节削掉，
         // 主机只能看到三次超时，完全不知道是自己发太大了。
         let mut bus = CommandBus::new(SimDevice::new(Scenario::Dc));
         bus.connect().unwrap();

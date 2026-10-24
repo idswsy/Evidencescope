@@ -1,6 +1,6 @@
 # 07 · 开发环境搭建
 
-> 目标：**新成员克隆仓库后 15 分钟内能跑通 `cargo test` 与 C 端向量测试。**
+> 目标：**新成员克隆仓库后 15 分钟内完成 `cargo test` 与 C 端向量测试。**
 > 遇到问题先看第 6 节「已知的坑」，那两个坑几乎人人都会踩。
 
 ---
@@ -11,14 +11,14 @@
 |---|---|---|---|
 | **git** | ≥ 2.30 | 版本管理 | 全员 |
 | **Rust** (rustup) | stable | 上位机 | 上位机 + Agent |
-| **Python** | ≥ 3.8 | 生成黄金测试向量 | 全员（跑测试要用） |
+| **Python** | ≥ 3.8 | 生成黄金测试向量 | 全员（执行测试时使用） |
 | **C 编译器** (gcc) | C11 | 协议层测试（`./proto/run_tests.sh`） | **全员** —— 见下方说明 |
 | **Keil MDK** | 5.x + **ARMCC5**（工程实测 `V5.06 update 5`；AC6 未验证） | 固件编译 | 固件 |
 | **DAP-Link** | — | 烧录 | 固件 |
 
 > **Python 与 gcc 都不是可选项。** `proto/tests/vectors.json` 由 `gen_vectors.py`
 > 生成，C 端测试又依赖 `gen_header.py` 把它转成头文件，再交给 gcc 编译 —— 三步缺一不可。
-> 协议是三方交汇点，**谁改了协议都要自己先跑一遍两端测试**，所以三个人都需要它们。
+> 协议是三方交汇点，**谁改了协议都要自己先执行一遍两端测试**，所以三个人都需要它们。
 
 ### 安装命令
 
@@ -60,7 +60,7 @@ brew install gcc python3                        # macOS
 
 ---
 
-## 2. 跑通验证（10 分钟）
+## 2. 执行验证（10 分钟）
 
 ```bash
 git clone https://github.com/idswsy/f103-agent-scope.git
@@ -77,7 +77,7 @@ cd f103-agent-scope
 #       判断标准只有一个：所有 test result 都是 ok。
 #       （2026-10-10 实测：不含 GUI 的 workspace 为 302 项，含 GUI 另 84 项 + 5 ignored）
 
-# ── 3. 端到端：对着模拟器抓一次波形 ──────────────────
+# ── 3. 端到端：对模拟器执行一次波形采集 ──────────────────
 ./host/run.sh run -p scope-cli -- sim capture --scenario sine_1k_3v3 -n 1024 -o wave.csv
 # 期望：打印采集摘要，并写出 wave.csv
 
@@ -99,11 +99,11 @@ cd f103-agent-scope
 | 重新生成黄金向量 | `./proto/run_tests.sh --regen` |
 | 格式 + 静态检查 | `./host/run.sh fmt --all && ./host/run.sh clippy --all-targets` |
 | 列出可用串口 | `./host/run.sh run -p scope-cli -- ports` |
-| 连真机抓波形 | `./host/run.sh run -p scope-cli -- serial --port COM3 capture -n 2048 -o wave.csv` |
+| 连真机采集波形 | `./host/run.sh run -p scope-cli -- serial --port COM3 capture -n 2048 -o wave.csv` |
 | 对模拟器开发 | `./host/run.sh run -p scope-cli -- sim capture --scenario i2c_100k -n 4096 -o i2c.csv` |
 | UART 单通道解码 | `./host/run.sh run -p scope-cli -- sim decode --protocol uart --scenario uart_115k -n 4096` |
 | 打开桌面 GUI | `./host/run.sh run -p scope-gui -- --demo --scenario i2c_100k` |
-| 只跑某个 crate | `./host/run.sh test -p scope-mcp` |
+| 只执行某个 crate | `./host/run.sh test -p scope-mcp` |
 
 > **始终用 `./host/run.sh` 而不是直接 `cargo`** —— 见下面的坑 #1。
 >
@@ -124,8 +124,8 @@ cd f103-agent-scope
    > （ADC 的外部触发）也没有 USART1（协议链路）** —— 重新生成会把这两条链路一起删掉。
    > `Core/Src/tim.c` 的 `MX_TIM4_Init()` 与 `Core/Src/usart.c` 的 `MX_USART1_UART_Init()`
    > 才是当前工程的真实配置。
-   > 不想开 Keil 也可以只跑协议逻辑：固件侧那份在 PC 上用 gcc 就能编 —— 直接跑
-   > `./proto/run_tests.sh`：它会自己生成向量头、决定编译参数、跑完报数。
+   > 不想开 Keil 也可以只执行协议逻辑：固件侧那份在 PC 上用 gcc 就能编 —— 直接执行
+   > `./proto/run_tests.sh`：它会自己生成向量头、决定编译参数、执行完报数。
 
 想手工编的话**必须带上生成目录** —— `vectors.h` 是生成物，不在 `proto/` 下：
 
@@ -170,7 +170,7 @@ gcc -std=c11 -Iproto -Iproto/build -o /tmp/tv \
 1. `docs/03-protocol.md`
 2. `proto/protocol.h`
 3. `host/crates/proto/src/lib.rs`
-4. `proto/tests/vectors.json`（跑 `./proto/run_tests.sh --regen`）
+4. `proto/tests/vectors.json`（执行 `./proto/run_tests.sh --regen`）
 
 然后两端测试必须全绿：
 
@@ -249,5 +249,5 @@ PA12 疑似 1.5 kΩ 硬上拉（`【待测】` —— **这是上一块板的结
 | 角色 | 只装这些就够 |
 |---|---|
 | 上位机 / Agent | git + Rust + Python |
-| 固件 | git + Python + Keil + DAP-Link + MinGW（跑 C 端测试）|
+| 固件 | git + Python + Keil + DAP-Link + MinGW（执行 C 端测试）|
 | 硬件 | git + Python + 立创EDA专业版 + 万用表 |

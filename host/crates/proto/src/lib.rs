@@ -319,7 +319,7 @@ impl Default for State {
     ///
     /// 有默认值是为了让 [`DeviceStatus`](scope_core) 之类「先 Default 再填」的
     /// 结构能用 `#[derive(Default)]`；**不要**拿它当「读不到就当作空闲」的
-    /// 兜底 —— 那会把「设备回了个我们不认识的状态」伪装成「设备空闲」。
+    /// 兜底 —— 那会把「设备返回未知状态」伪装成「设备空闲」。
     fn default() -> State {
         State::Idle
     }
@@ -740,7 +740,7 @@ impl ChunkHeader {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 测试：跑与 C 端同一份黄金向量
+// 测试：执行与 C 端同一份黄金向量
 // ══════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
@@ -754,8 +754,9 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../../proto/tests/vectors.json"
         );
-        let raw = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("读不到黄金向量 {path}: {e}\n先跑 `make -C proto vectors`"));
+        let raw = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!("读不到黄金向量 {path}: {e}\n先执行 `make -C proto vectors`")
+        });
         serde_json::from_str(&raw).expect("vectors.json 格式非法")
     }
 

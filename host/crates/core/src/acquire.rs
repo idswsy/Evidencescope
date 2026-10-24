@@ -134,7 +134,7 @@ impl TriggerEvent {
 /// 按请求值解就是把两种布局当成同一种读，出来的波形全是垃圾。
 ///
 /// 只产出 `count` 个样点：PACK12 奇数时最后一对里有一个填充值，
-/// 超出 `count` 的部分必须丢掉。payload 装不下 `count` 个样点 → 报错
+/// 超出 `count` 的部分必须丢掉。payload 容量不足以容纳 `count` 个样点 → 报错
 /// （设备声明与实际不符），**不**静默返回半段数据。
 fn decode_chunk_samples(format: u8, payload: &[u8], count: u16) -> Result<Vec<u16>> {
     let count = count as usize;

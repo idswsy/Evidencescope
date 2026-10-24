@@ -26,7 +26,7 @@
 | | 谁主导 | 通向模型的协议 | 何时用 |
 |---|---|---|---|
 | `scope-mcp` | **AI**（它决定采什么、怎么采） | MCP | 外部 AI 客户端接入 |
-| `scope-gui` 的 AI 面板 | **人**（点按钮，AI 只解释） | HTTPS 单发 | 分析屏幕上正在看的那一窗 |
+| `scope-gui` 的 AI 面板 | **人**（手动触发采集，AI 仅解释） | HTTPS 单发 | 分析屏幕上正在看的那一窗 |
 
 > ⚠ 真机串口是**独占**的，二者不能同时连同一台设备。所以「让 AI 分析你屏幕上
 > 这一窗」**只能在 GUI 进程内做** —— 不是二选一，是那条路走不通。
@@ -191,7 +191,7 @@ proto/
 | `host/crates/sim` | 实现同一 `DevicePort`，内含 F103 真实档位表、ARM/触发/环缓冲语义、状态机约束（`ARMED` 下发配置回 `BUSY`）、seq 去重缓存 |
 | 故障注入 | [`FaultInjection`](../host/crates/sim/src/device.rs) 六个字段：`drop_every_n_frames` / `crc_err_every_n_frames` / `latency_spike_probability` / `latency_spike_ms` / `no_trigger` / `force_overrun` |
 | `host/crates/device` | `Transport` enum：运行时在模拟器与串口之间切换（`Box<dyn DevicePort>` 不行的原因见该 crate 的文档头） |
-| C 端纯逻辑测试 | `App/` 层不依赖 HAL → PC 上 gcc 编译跑同一批黄金向量 |
+| C 端纯逻辑测试 | `App/` 层不依赖 HAL → PC 上 gcc 编译后执行同一批黄金向量 |
 
 两种传输（`serialport` 串口 / `sim`）即插即用，切到 `transport='sim'` 后 **Agent 逻辑零改动**。
 

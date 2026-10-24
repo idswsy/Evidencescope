@@ -654,7 +654,7 @@ impl App {
                 // 之前那条红字会一直挂在底栏
                 self.last_error = None;
                 // 连续模式下**不重置视口**：每帧 reset 会把用户的滚轮缩放 /
-                // 拖拽清掉，等于连续跑起来就没法看细节。会话第一帧的适配
+                // 拖拽清掉，等于连续运行时无法查看细节。会话第一帧的适配
                 // 由勾选框打开时置的一次 `fit_pending` 负责。
                 self.fit_pending = !self.continuous;
 
@@ -719,7 +719,7 @@ impl App {
         // I2C 解码至少要两条线。单通道采集（正弦 / 方波 / 直流…）**不是错误**，
         // 只是这个场景没有 I2C 可解 —— 静默跳过。
         // 回归：之前这里会一路走到 decode_capture 报 InvalidParam，
-        // 于是用户抓个正弦波都会看到一条红字错误。
+        // 于是用户采集正弦波时也会看到一条红字错误。
         if cap.channels.len() < 2 {
             self.decode = None;
             return;
@@ -778,7 +778,7 @@ impl eframe::App for App {
 
         // ── AI 驱动会话 ──
         //
-        // 先收事件（收进 Vec 再处理，避免在闭包里可变借走 App），
+        // 先接收事件（写入 Vec 再处理，避免在闭包里可变借走 App），
         // 再推状态机。迟到的会话事件靠世代号丢弃。
         let mut drive_events = Vec::new();
         let mut gen = 0;
@@ -848,7 +848,7 @@ impl eframe::App for App {
                     panels::log(self, ui);
                 });
             });
-        // 详情面板必须自己占一个面板。`Plot::show` 会**吃掉所有可用高度**，
+        // 详情面板必须自己占一个面板。`Plot::show` 会**占用全部可用高度**，
         // 直接跟在它后面的东西会被整个挤出屏幕 —— 交易表和色标就是这么消失的。
         //
         // 有采集就显示：**测量对任何信号都适用**，不只是 I2C。里面的解码部分

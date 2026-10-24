@@ -325,7 +325,7 @@ impl<P: DevicePort> CommandBus<P> {
         // 主机 → 设备方向的上限是 MAX_PAYLOAD_RX（512），**比设备发来的小得多**。
         //
         // 必须在这里拦下：设备的解析缓冲只有 MAX_FRAME_RX（524 字节），
-        // 收到的帧一旦装不下，解析器会把它逐字节削掉，既不解析也不回错误帧
+        // 收到的帧一旦超出解析缓冲容量，解析器会把它逐字节削掉，既不解析也不回错误帧
         // —— 主机只能看到三次无意义的超时，完全不知道是自己发太大了。
         if frame.payload.len() > scope_proto::MAX_PAYLOAD_RX {
             return Err(ScopeError::InvalidParam {
@@ -406,7 +406,7 @@ impl<P: DevicePort> CommandBus<P> {
         }
     }
 
-    /// 把设备主动上报的事件吸收进状态缓存。
+    /// 把设备主动上报的事件并入状态缓存。
     fn observe_event(&mut self, frame: &Frame) {
         // EventOverrun / EventLog 不改状态机，调用方要靠 GET_STATUS 里的
         // overrun_samples 计数看到它们，所以这里只处理 EventTrigger。
@@ -472,8 +472,8 @@ impl<P: DevicePort> CommandBus<P> {
     /// `GET_STATUS`：任何状态下都可调用。
     pub fn get_status(&mut self) -> Result<DeviceStatus> {
         let resp = self.transaction(Cmd::GetStatus, Vec::new(), TIMEOUT_CONTROL)?;
-        // 解析失败**不当成 Idle 混过去** —— 那会让「设备回了一个我们不认识的
-        // 状态」看起来像「设备空闲」。此时应直接报错。
+        // 解析失败**不当成 Idle 混过去** —— 那会让「设备返回未知状态」
+        // 看起来像「设备空闲」。此时应直接报错。
         let st = DeviceStatus::decode(&resp.payload).ok_or_else(|| {
             ScopeError::Unsupported(format!(
                 "GET_STATUS 响应长度 {} 字节，协议规定 33 字节",

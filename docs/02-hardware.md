@@ -208,7 +208,7 @@ TL072 的 GBW 只有 3 MHz，对 400 kHz I2C 的 300 ns 边沿已经偏软，
 
 这些文件体积大，**不入库**（`.gitignore` 已排除 `hardware/upstream/downloads/`）。
 **直链只写在 [`hardware/fetch-upstream.sh`](../hardware/fetch-upstream.sh) 里**
-（README 没有 URL）—— 或者干脆直接跑它：
+（README 没有 URL）—— 或直接执行该脚本：
 
 ```bash
 ./hardware/fetch-upstream.sh

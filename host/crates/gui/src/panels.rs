@@ -581,7 +581,7 @@ pub fn history(app: &mut App, ui: &mut egui::Ui) {
             for (id, rate, _t, overrun) in entries {
                 let label = format!("#{id}  {} Hz{}", rate, if overrun { "  ⚠溢出" } else { "" });
                 if ui.selectable_label(current == Some(id), label).clicked() {
-                    // 回看历史：换掉当前采集并重算解码，**不重抓**
+                    // 回看历史：换掉当前采集并重算解码，**不重新采集**
                     if let Some(c) = app.store.get(id) {
                         app.capture = Some(c.clone());
                         app.mark_decode_dirty();
@@ -975,7 +975,7 @@ pub fn plot(app: &mut App, ui: &mut egui::Ui) {
             pui.vline(VLine::new("触发", x).color(egui::Color32::from_rgb(255, 80, 80)));
         }
     });
-    // 色标**不在这里**画 —— `Plot::show` 会吃掉所有可用高度，
+    // 色标**不在这里**画 —— `Plot::show` 会占用全部可用高度，
     // 跟在它后面的行会被压成零高，只漏出一排残影。
     // 唯一的那份在下面 `decode_panel` 里。
 }
@@ -1639,7 +1639,7 @@ fn export_answer(app: &mut App, cap: &scope_core::Capture, answer: &crate::ai::A
 
 fn decode_panel(app: &mut App, ui: &mut egui::Ui) {
     // ★ 色标的**唯一**一份在这里。
-    // 不要同时在 `plot()` 末尾再画一次：`Plot::show` 会吃掉所有可用高度，
+    // 不要同时在 `plot()` 末尾再画一次：`Plot::show` 会占用全部可用高度，
     // 那一份会被压成零高、只漏出一排残影，看起来像界面错位了。
     span_legend(ui);
 

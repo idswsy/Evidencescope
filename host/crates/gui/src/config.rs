@@ -12,8 +12,8 @@
 //! # 纵深防护（四道，任何一道单独都不够）
 //!
 //! 1. **路径解析绝不回退**。两个环境变量都没有 → 返回 `None`，配置只留在内存里。
-//!    这是最要紧的一道：回退到「当前目录」或「exe 旁边」正是 key 落进仓库的
-//!    唯一真实入口，所以干脆不给这个可能。
+//!    这是最要紧的一道：回退到「当前目录」或「exe 旁边」正是 key 写入仓库的
+//!    唯一真实入口，因此不提供该回退路径。
 //! 2. **写之前断言目标不在仓库里**。[`check_writable`] 会把双方都
 //!    canonicalize 再比前缀 —— 光是字符串比较挡不住 `..` 和符号链接。
 //! 3. **Unix 下 `0600`**。Windows 下照实说做不到。
@@ -41,7 +41,7 @@ const DIR_NAME: &str = "scope-gui";
 /// 默认端点 —— DeepSeek 的 Anthropic 兼容地址。
 ///
 /// 与 `tools/agent_demo/agent.py` 的 `AGENT_BASE_URL` 默认值一致：
-/// 那边已经跑通过，形状（`x-api-key` + `anthropic-version`）是验证过的。
+/// 那边的接口已验证可用，形状（`x-api-key` + `anthropic-version`）是验证过的。
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com/anthropic/v1/messages";
 
 /// 默认模型。
@@ -234,7 +234,7 @@ mod tests {
 
     /// **最要紧的一条。** 一个环境变量都没有时必须返回 `None`。
     ///
-    /// 如果这里改成「回退到当前目录」，key 就会直接落进仓库 ——
+    /// 如果这里改成「回退到当前目录」，key 就会直接写入仓库 ——
     /// 那是这个功能唯一能造成真实伤害的失败模式。
     #[test]
     fn no_env_means_no_path_never_a_fallback() {

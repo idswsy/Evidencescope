@@ -17,8 +17,8 @@
 //! 1. **找 `scope-mcp` 可执行文件** —— 按 `current_exe()` 同级找，
 //!    不按 cwd（GUI 的 cwd 与仓库根不同）
 //! 2. **stdio JSON-RPC 客户端** —— 起进程、发请求、读响应，外加把所有
-//!    「看起来能跑但会卡死」的地方堵上（见 [`McpProcess`] 的说明）
-//! 3. **工具循环** —— 移植自 `tools/agent_demo/agent.py`，那是一个已经跑通的
+//!    「看似可运行但会卡死」的地方堵上（见 [`McpProcess`] 的说明）
+//! 3. **工具循环** —— 移植自 `tools/agent_demo/agent.py`，那是一个已验证可用的
 //!    参考实现；但它有几处做法**不能照抄**，逐条写在 [`run_session`] 上面
 //!
 //! # 显示由 GUI 自己镜像，不用 AI 的读数
@@ -147,10 +147,10 @@ pub fn parse_line(line: &str) -> Option<Value> {
     serde_json::from_str::<Value>(t).ok()
 }
 
-/// 校验响应里的 `id` 是不是我们等的那一条。
+/// 校验响应里的 `id` 是否为当前等待的那一条。
 ///
 /// 没有 `id` 的（通知）直接跳过；有 `id` 但对不上的**报错** ——
-/// 我们一次只发一条请求，出现别的 id 就是协议出问题了，静默收下会让
+/// 本实现一次只发送一条请求，出现别的 id 就是协议出问题了，静默收下会让
 /// 调用方拿着别人的结果当自己的。
 pub fn check_id(resp: &Value, want: u64) -> Result<bool, AiError> {
     match resp.get("id") {
@@ -211,7 +211,7 @@ pub fn rebuild_capture(meta: &Value, channels: Vec<Vec<u16>>) -> Result<Capture,
 
 /// 一个 `scope-mcp` 子进程，加一条 stdio JSON-RPC 通道。
 ///
-/// # 与 `agent.py` 的三处不同（都是「看起来能跑但会卡死」的坑）
+/// # 与 `agent.py` 的三处不同（都是「看似可运行但会卡死」的坑）
 ///
 /// 1. **stderr 要排空。** `agent.py` 把它接进管道却从不读 —— 子进程往 stderr
 ///    写够一个管道缓冲就**永久阻塞**。这里单开一条线程读掉。
@@ -580,11 +580,11 @@ pub enum DriveEvent {
     Failed(AiError),
 }
 
-/// 跑一次完整会话。**阻塞**，只能在专用线程里调。
+/// 执行一次完整会话。**阻塞**，只能在专用线程里调。
 ///
 /// # 与 `tools/agent_demo/agent.py` 的关系
 ///
-/// 循环的骨架是从它移植的（那是唯一一个已经跑通 MCP 工具循环的参考实现），
+/// 循环的骨架是从它移植的（那是唯一一个已验证可用的 MCP 工具循环参考实现），
 /// 但有几处**故意不同**：
 ///
 /// | `agent.py` | 这里 | 为什么 |
@@ -679,7 +679,7 @@ pub fn run_session(
             {
                 return Err(AiError::new(
                     "会话在最后一轮用光了 token 预算，未留下任何结论".to_string(),
-                    "整个预算被思考块吃掉了。减少采集点数后重试，或把任务描述得更具体",
+                    "整个预算被思考块消耗。减少采集点数后重试，或把任务描述得更具体",
                 ));
             }
 
@@ -932,7 +932,7 @@ pub struct DriveHandle {
 }
 
 impl DriveHandle {
-    /// 排空事件。**收进 Vec 再处理** —— 与 `worker.rs` / `ai.rs` 同一套纪律，
+    /// 排空事件。**先写入 Vec 再处理** —— 与 `worker.rs` / `ai.rs` 同一套纪律，
     /// 免得在闭包里可变借走 `App`。
     pub fn drain(&self, mut f: impl FnMut(DriveEvent)) {
         while let Ok(e) = self.events.try_recv() {
@@ -1062,7 +1062,7 @@ impl DrivePhase {
 /// 1. **provenance** —— AI 期间 GUI 处于断开状态，[`crate::app::App::link_description`]
 ///    会输出「serial @ 921600」、`simulated` 会变成 false。**模拟器会被说成串口。**
 ///    有这个快照，锚点行与证据包才说得出真话。
-/// 2. **「恢复交接前的设置」** —— 用户点一下就按它重配。
+/// 2. **「恢复交接前的设置」** —— 用户手动触发后即按其重新配置。
 #[derive(Debug, Clone)]
 pub struct Handoff {
     /// 链路的一句话描述（给人看，也进证据包）。
@@ -1581,7 +1581,7 @@ mod tests {
     /// 这条覆盖的是「AI 采了一窗，GUI 自己把它拉回来画出来」：
     /// 起子进程 → 连模拟器 → 采一窗 → [`Mirrored::poll`] 重建 `Capture`。
     ///
-    /// 为什么值得单独有一条：真跑一次完整会话要花 LLM 的钱，而镜像**不经过
+    /// 为什么值得单独有一条：真实执行一次完整会话要花费 LLM 的费用，而镜像**不经过
     /// LLM** —— 把它单独拎出来验，既便宜又能定位问题（会话没出图时，
     /// 一眼就能分清是镜像失效，还是模型压根未读取样点）。
     ///

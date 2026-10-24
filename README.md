@@ -276,7 +276,7 @@ AI 分析、故障注入、日志、帮助。
 # 接入 Claude Code
 claude mcp add scope -- <仓库绝对路径>/host/target/debug/scope-mcp.exe
 
-# 或直接以 JSON-RPC 对话
+# 或直接以 JSON-RPC 通信
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | ./host/target/debug/scope-mcp.exe
 
 # 查看工具清单与三层 token 防护说明
@@ -361,9 +361,9 @@ GUI 按交接快照自动重连设备；运行期间可「终止」；设备收�
 | 阶段 | 目标 | 状态 | 验收标准 |
 |---|---|---|---|
 | P0 | 协议闭环（无硬件） | 完成 | 黄金向量在 C 与 Rust 两端全绿；`sim` 可完成 capture |
-| P1 | 最简硬件闭环 | 固件侧可编译（252 项 PC 断言，0 Error / 0 Warning）；**真机采集未验证** | F103 采 2048 点 → 串口 → CLI 落 CSV → 绘图 |
+| P1 | 最简硬件闭环 | 固件侧可编译（252 项 PC 断言，0 Error / 0 Warning）；**真机采集未验证** | F103 采 2048 点 → 串口 → CLI 写入 CSV → 绘图 |
 | P2 | 数字通路 I2C 解码 | 进行中：主机侧完成；**固件侧未开始**（`App/i2c_decode.c` 与边沿时间戳缓冲均未创建） | 100 kHz / 400 kHz / 1 MHz 实总线解码结果与逻辑分析仪一致 |
-| P3 | MCP + Agent | 完成，见 [docs/08](docs/08-agent-walkthrough.md) | Agent 一句话完成「抓一次 I2C 写时序并说明 NACK 原因」 |
+| P3 | MCP + Agent | 完成，见 [docs/08](docs/08-agent-walkthrough.md) | Agent 单条指令完成「采集一次 I2C 写时序并说明 NACK 原因」 |
 | P4 | 增强 | 进行中：GUI、历史、导出、AI 分析面板已完成；板载屏幕已**冻结**（`display.c` 移出 Keil 工程，代码保留，见 [docs/09](docs/09-realtime-display.md) §4.4）；改板与自动量程未做 | 双通道改板、自动量程、等效时间采样 |
 | P5 | 主板升级 STM32F407（后期计划） | 未开始 | 以太网 / FSMC / 3 个 ADC：7.2 MSPS、深存储、原始波形直传 |
 

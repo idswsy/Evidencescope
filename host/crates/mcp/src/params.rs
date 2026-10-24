@@ -703,7 +703,7 @@ impl InjectArgs {
     /// 概率越界会被**拒绝**。回归：schema 里写着 `0.0..=1.0`，但
     /// `range()` 只是注解、serde 不校验，于是 `-3.0` 一路走到
     /// `roll < probability` —— 恒假，**等于把故障静默清掉**，而响应还说
-    /// `faults_clean: true`，看不出是「你没注入」还是「你的参数被吃掉了」。
+    /// `faults_clean: true`，看不出是「未注入」还是「参数未生效」。
     pub fn into_faults(self) -> Result<FaultInjection, String> {
         let p = self.latency_spike_probability.unwrap_or(0.0);
         if !(0.0..=1.0).contains(&p) {
@@ -919,8 +919,8 @@ mod tests {
     fn inject_rejects_a_probability_outside_the_declared_range() {
         // 回归：schema 里写着 `0.0..=1.0`，但 `range()` 只是注解、serde 不校验，
         // 于是 `-3.0` 一路走到 `roll < probability` —— 恒假，**等于把故障
-        // 静默清掉**，而响应还说 `faults_clean: true`，看不出是「你没注入」
-        // 还是「你的参数被吃掉了」。`2.5` 则是「每 7 帧必延迟」，也不是
+        // 静默清掉**，而响应还说 `faults_clean: true`，看不出是「未注入」
+        // 还是「参数未生效」。`2.5` 则是「每 7 帧必延迟」，也不是
         // 它字面上的意思。
         // 只测有限值：JSON 里没有 NaN/Infinity，`json!` 会把它们写成 `null`，
         // 而 `null` 在 `Option<f64>` 上意味着「没给」—— 这是**构造不出**的输入，

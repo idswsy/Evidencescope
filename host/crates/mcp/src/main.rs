@@ -409,7 +409,7 @@ const TOOLS: &[ToolSpec] = &[
     ),
     tool!(
         "scope_list_captures",
-        "列出主机侧保存的最近采集，供引用而不必重抓",
+        "列出主机侧保存的最近采集，供引用而不必重新采集",
         "无（本地 capture store）",
         "总是",
         ToolAnnotations::READ_ONLY,
@@ -482,7 +482,7 @@ fn main() -> Result<()> {
 // stdio 上的 MCP server
 // ══════════════════════════════════════════════════════════════
 
-/// 我们声明支持的最新协议版本。
+/// 本服务声明支持的最新协议版本。
 ///
 /// `2025-03-26` 相对 `2024-11-05` 的关键增量是**工具注解**（`annotations`），
 /// `tools/list` 里正在用它 —— 停在旧版本号上却发新字段，会造成版本声明与
@@ -604,7 +604,7 @@ fn handle_line(
     match req.method.as_str() {
         "initialize" => {
             // 客户端声明它支持的版本。**认得就按它的回** —— 回一个比客户端新的版本，
-            // 会让它拿不认识的语义去解释后面的响应。不认得才回我们最新的。
+            // 会让它拿不认识的语义去解释后面的响应。客户端不识别时才返回最新版本。
             let asked = params.get("protocolVersion").and_then(|v| v.as_str());
             let agreed = match asked {
                 Some(v) if SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v,
@@ -773,7 +773,7 @@ fn tool_err(e: session::ToolError) -> anyhow::Error {
     }
 }
 
-/// 跑一遍完整链路，确认命令层真的可用。
+/// 执行一遍完整链路，确认命令层真的可用。
 fn selftest() -> Result<()> {
     println!("== scope-mcp 自检 ==");
     println!();
@@ -1121,7 +1121,7 @@ mod tests {
         );
     }
 
-    /// 回显客户端认识的版本，不认识才回我们最新的。
+    /// 回显客户端认识的版本，不识别时才返回最新版本。
     ///
     /// 回一个比客户端更新的版本，它会拿不认识的语义解释后面的响应 ——
     /// 而这次新增的 `annotations` 正是版本相关的字段。
