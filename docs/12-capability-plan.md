@@ -152,7 +152,7 @@ pub enum RefuseReason {
 | # | 判据 | 命令 / 检查 |
 |---|---|---|
 | A1 | serde round-trip：任一样本 `AnalysisReport` 序列化再反序列化后与原值相等 | `cargo test -p scope-core analysis::` |
-| A2 | `report.rs` 不再直接取 `Measurements` 字段（唯一取字段处是 `analysis::render_text`） | `grep -nE "\bm\.(vpp|min|max|mean|rms|ac_rms|freq_hz|duty_pct|rise_ns|fall_ns|overshoot_pct|undershoot_pct|high_ns|edges)\b" host/crates/core/src/report.rs` 应为 0 行；另加 5 个代表场景的证据包黄金文本逐字节比对 |
+| A2 | `report.rs` 不再直接取 `Measurements` 字段（唯一取字段处是 `analysis::render_text`） | `grep -nE "\bm\.(vpp|min|max|mean|rms|ac_rms|freq_hz|duty_pct|rise_ns|fall_ns|overshoot_pct|undershoot_pct|high_ns|edges)\b" host/crates/core/src/report.rs` 应为 0 行；另加 5 个代表场景的证据包黄金文本逐字节比对 —— `host/crates/sim/tests/evidence_golden.rs` + `tests/fixtures/evidence/`（sine / step_ring / noise / i2c / uart） |
 | A3 | MCP 与证据包对同一采集给出一致的标量 | 新增测试：同一 `Capture` 走两个出口，逐字段比较 |
 | A4 | 无不确定度时**不得**输出 `ok` 判决 | `Quality::empty()` 下：无模型的量为 `Refused(NoUncertaintyModel)`；未标定的电压量为 `Refused(CalibrationMissing)`；占空比为 `Refused(ModelUnverified)` |
 | A5 | 主机侧测试数不下降 | `host/run.sh test`，起点 386 passed / 5 ignored；G1 落地后 399 passed / 5 ignored |
