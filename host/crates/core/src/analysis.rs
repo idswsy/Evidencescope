@@ -706,7 +706,7 @@ fn verdict_line(q: &Quality) -> Option<String> {
             continue;
         }
         match verdict {
-            Verdict::Ok { u } if *u == 0.0 => uncertain.push(key.clone()),
+            Verdict::Ok { u } if *u == 0.0 => exact.push(key.as_str()),
             Verdict::Ok { u } => uncertain.push(format!("{key}±{u:.3}")),
             Verdict::Bounded { lower } => bounds.push(format!("{key}≥{lower:.1}")),
             Verdict::BoundedAbove { upper } => bounds_above.push(format!("{key}≤{upper:.1}")),
@@ -1310,6 +1310,22 @@ mod tests {
         );
         let line = verdict_line(&q).expect("非空判决应渲染");
         assert!(line.contains("future_metric"), "新量不能静默消失：{line}");
+    }
+
+    #[test]
+    fn table_external_exact_verdict_is_grouped_as_exact() {
+        let mut q = Quality::default();
+        q.verdicts
+            .insert("future_count".into(), Verdict::Ok { u: 0.0 });
+        let line = verdict_line(&q).expect("非空判决应渲染");
+        assert!(
+            line.contains("可信（精确）: future_count"),
+            "u=0 的表外计数应归入「可信（精确）」：{line}"
+        );
+        assert!(
+            !line.contains("可信: future_count"),
+            "u=0 的表外计数不应带进「可信」组：{line}"
+        );
     }
 
     #[test]
