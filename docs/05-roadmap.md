@@ -93,7 +93,7 @@ CI 里也跑它。这正是那条分层的意义：三个人里两个人不拿�
 |---|---|---|
 | 模拟器 | `host/crates/sim/` | 含 F103 真实档位表、触发语义、故障注入；故障注入必须**在主机侧可观测** |
 | MCP Server | `host/crates/mcp/` | 工具 schema 由参数类型经 `schemars` 生成，**不是手写的**；见下方「schema 与实现的一致性」 |
-| 15 个粗粒度工具 | `host/crates/mcp/src/main.rs` 的 `TOOLS` | 见下表 |
+| 16 个粗粒度工具 | `host/crates/mcp/src/main.rs` 的 `TOOLS` | 见下表 |
 | Agent 工作流 | [`08-agent-walkthrough.md`](08-agent-walkthrough.md) 生成程序在 [`tools/agent_demo/`](../tools/agent_demo/) | 一段**可复现**的对话实录：一个 LLM 走 MCP 原生工具调用完成一次总线排查，并自己做对照实验。写它的过程暴露了四个问题（模拟器没有读事务、造不出 NACK、解码器把两个正常现象报成异常），都已修 —— 见该文第 5 节 |
 
 ### schema 与实现的一致性（P3 的硬性验收）
@@ -125,7 +125,7 @@ Agent 拿到的是它没要求的配置下的数据。
 以及每个工具都有一条「配置之后夹一次真实操作再读回」的测试
 （如 `configured_trigger_survives_a_capture`）。
 
-### MCP 工具清单（粗粒度，**15 个** Agent 意图）
+### MCP 工具清单（粗粒度，**16 个** Agent 意图）
 
 > 这份清单必须与 `host/crates/mcp/src/main.rs` 的 `TOOLS` 常量**逐字一致** ——
 > 那边是唯一真相源，本表是给人看的镜像。改一处必须改两处。
@@ -144,6 +144,7 @@ Agent 拿到的是它没要求的配置下的数据。
 | `scope_i2c_decode(capture_id, ...)` | **解码 I2C 帧序列 + 信号质量评估**。`scope_decode(protocol=i2c)` 的兼容别名 | 主机侧解码 |
 | `scope_list_captures()` | 历史采集注册表（保留最近 16 次） | 无（本地） |
 | `scope_save_capture(capture_id, path)` | **全量数据只进磁盘，不进 LLM token** | 无（本地） |
+| `scope_import_capture(path, ...)` | 从 CSV 导入一次采集到本会话（不连设备），路径限工作目录内 `.csv`。返回的 `capture_id` 可直接用于 `scope_measure` / `scope_decode` | 无（本地） |
 | `scope_watch(duration_ms?)` | 在一段时间里**重复单次采集**，返回滚动摘要（设备侧流模式尚未实现） | `ARM` + `EVENT_TRIGGER` + `STOP`，循环 |
 | `scope_sim_set_scenario(...)` | 切换场景 / 换随机种子 / 注入故障。故障**整体替换**（`inject:{}` 即清除）。⚠ 它**总是**出现在 `tools/list` 里，连上串口后调用会得到一句明确错误 —— 见下方说明 | 无（模拟器内部） |
 | `scope_debug_raw(...)` | 逃生门。仅 `SCOPE_MCP_DEBUG=1` 时注册 | 任意（含 `MEM_READ`） |

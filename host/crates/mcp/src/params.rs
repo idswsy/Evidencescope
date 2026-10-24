@@ -602,6 +602,31 @@ pub struct DecodeArgs {
     pub i2c: Option<I2cParams>,
 }
 
+/// `scope_import_capture`
+///
+/// 从 CSV 导入一次采集到本会话（**不连设备**）。导入后可直接用
+/// `scope_measure` / `scope_decode` 引用返回的 `capture_id`。
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportCaptureArgs {
+    /// CSV 路径，例如 "./captures/wave.csv"
+    pub path: String,
+    /// 显式采样率（Hz）。**首行 `# rate_hz=` 优先**，其次本字段，
+    /// 最后才由时间列反推（且只在能精确反推时才接受）
+    #[schemars(range(min = 1u64, max = 4_294_967_295u64))]
+    pub rate_hz: Option<u64>,
+    /// 满量程电压（V），默认 3.3。与 `offset_v` 都不给时，按当前标定窗口的
+    /// 换算解释电压列（本项目导出文件是双极性的，0 V 在码值 2048）
+    #[schemars(range(min = 0.001, max = 100.0))]
+    pub full_scale_v: Option<f64>,
+    /// 码值 0 对应的输入电压（V），默认 0（单极性 0..3.3 V）
+    pub offset_v: Option<f64>,
+    /// 电压列也按原始码值解析（`CH1V` 不换算）
+    pub raw: Option<bool>,
+    /// 时间原点不为零时归一化（否则拒绝）
+    pub normalize_t0: Option<bool>,
+}
+
 /// `scope_save_capture` 的导出格式。
 ///
 /// 从前 schema 宣称支持 npy / bin 而实现一律写 CSV —— 静默落错格式比报错

@@ -18,8 +18,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use scope_core::{decode_uid, encode_uid, is_placeholder_uid, CalibrationStore};
 use scope_core::{
-    AcquireParams, Capture, CaptureStore, ChannelScale, CommandBus, DevicePort, I2cDecodeConfig,
-    Levels, ScaleSet, State,
+    from_csv, AcquireParams, Capture, CaptureStore, ChannelScale, CommandBus, DevicePort,
+    I2cDecodeConfig, ImportOptions, Levels, RateSource, ScaleSet, State, IMPORT_ID_BASE,
 };
 use scope_sim::{Scenario, SimDevice};
 use scope_transport_serial::{baud, SerialDevice};
@@ -67,6 +67,40 @@ enum Target {
     Cal {
         #[command(subcommand)]
         action: CalAction,
+    },
+
+    /// 从 CSV 导入一次采集并做测量。**不连接设备**
+    ///
+    /// 表头形如 `Time(s),CH1V`；速率优先读首行的 `# rate_hz=`。
+    /// 两个电压参数都不给时按导出端的双极性换算解释（0 V 在码值 2048），
+    /// 所以「本工具导出 → 本命令导入」可逐点还原。
+    Import {
+        /// CSV 文件路径
+        path: String,
+
+        /// 显式采样率（Hz）。文件首行的 `# rate_hz=` 优先
+        #[arg(long)]
+        rate_hz: Option<u64>,
+
+        /// 满量程电压（V）。与 --offset 都不给时用导出端的双极性换算
+        #[arg(long)]
+        full_scale: Option<f64>,
+
+        /// 码值 0 对应的输入电压（V）。单极性 0..3.3 V 文件给 0
+        #[arg(long)]
+        offset: Option<f64>,
+
+        /// 所有列都按原始码值解析（`CH1V` 不换算）
+        #[arg(long)]
+        raw: bool,
+
+        /// 时间原点不为零时归一化（否则拒绝）
+        #[arg(long)]
+        normalize_t0: bool,
+
+        /// 只测这一个通道（0 起）。省略则测全部通道
+        #[arg(long)]
+        channel: Option<usize>,
     },
 }
 
@@ -401,6 +435,24 @@ fn main() -> Result<()> {
 
         Target::Cal { action } => run_cal(action),
 
+        Target::Import {
+            path,
+            rate_hz,
+            full_scale,
+            offset,
+            raw,
+            normalize_t0,
+            channel,
+        } => run_import(
+            path,
+            rate_hz,
+            full_scale,
+            offset,
+            raw,
+            normalize_t0,
+            channel,
+        ),
+
         Target::Sim { action } => {
             let mut dev = SimDevice::new(action.scenario_or_default().into());
             println!("# 模拟器: {}", dev.describe());
@@ -412,6 +464,159 @@ fn main() -> Result<()> {
             println!("# 链路: {}", dev.describe());
             run(&mut dev, action)
         }
+    }
+}
+
+/// `scope-cli import` —— 从 CSV 导入一次采集并做测量。**不连接设备。**
+///
+/// 电压口径（与 MCP `scope_import_capture` 一致）：
+/// - `--full-scale` / `--offset` 都不给 → 按导出端的双极性换算
+///   （3.3 V 满量程、0 V 在码值 2048），「本工具导出 → 本命令导入」逐点还原；
+/// - 给了任一参数 → 显式模型，另一个取默认（满量程 3.3 V、offset 0，即单极性）。
+fn run_import(
+    path: String,
+    rate_hz: Option<u64>,
+    full_scale: Option<f64>,
+    offset: Option<f64>,
+    raw: bool,
+    normalize_t0: bool,
+    channel: Option<usize>,
+) -> Result<()> {
+    let text = std::fs::read_to_string(&path).with_context(|| format!("读取 CSV 失败：{path}"))?;
+
+    let explicit_voltage = full_scale.is_some() || offset.is_some();
+    let mut opts = if explicit_voltage {
+        ImportOptions::default()
+    } else {
+        ImportOptions::from_scale(&ChannelScale::default())
+    };
+    opts.id = IMPORT_ID_BASE;
+    opts.path = path.clone();
+    opts.rate_hz = rate_hz;
+    if let Some(v) = full_scale {
+        opts.full_scale_v = v;
+    }
+    if let Some(v) = offset {
+        opts.offset_v = v;
+    }
+    opts.raw = raw;
+    opts.normalize_t0 = normalize_t0;
+
+    let imported = from_csv(&text, &opts).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let capture = imported.capture;
+    let ch_count = capture.channels.len();
+
+    let targets: Vec<usize> = match channel {
+        Some(c) if c >= ch_count => bail!(
+            "--channel {c} 超出范围：文件里只有 {ch_count} 个通道（0..={}）",
+            ch_count.saturating_sub(1)
+        ),
+        Some(c) => vec![c],
+        None => (0..ch_count).collect(),
+    };
+
+    let rate_src = match imported.rate_source {
+        RateSource::Header => "文件首行 # rate_hz=",
+        RateSource::Option => "命令行 --rate-hz",
+        RateSource::TimeColumn => "时间列中位差分反推",
+    };
+    println!("# 导入: {path}");
+    println!(
+        "# 采样率: {} Hz（来源：{rate_src}）  {} 点 × {} 通道  {:.3} ms",
+        capture.rate_hz,
+        capture.len(),
+        ch_count,
+        capture.duration_us() as f64 / 1000.0
+    );
+    println!(
+        "# 电压换算: code = round((v - ({:+.6} V)) × 4096 / {:.6} V){}",
+        opts.offset_v,
+        opts.full_scale_v,
+        if raw {
+            "（--raw：所有列按原始码值）"
+        } else {
+            ""
+        }
+    );
+    if imported.t0_s != 0.0 {
+        println!("# 时间原点 t0 = {:.9} s（已归一化到 0）", imported.t0_s);
+    }
+
+    // 测量必须用导入时的同一套换算，否则「文件里是 3.3 V」会被打印成别的值。
+    // 这里**故意不查设备标定表**：导入的是第三方数据，与当前连没连设备无关。
+    let vpl = opts.full_scale_v / 4096.0;
+    let scale = ChannelScale {
+        volts_per_lsb: vpl,
+        // 写成 `0 − offset` 而不是 `−offset`：后者在 offset = 0 时得到 −0.0，
+        // 打印出来是「零点 -0」，看起来像个 bug。
+        zero_lsb: (0.0 - opts.offset_v) / vpl,
+    };
+    let scales = vec![scale; ch_count];
+    print_measurements(&capture, &scales, &targets);
+
+    println!();
+    println!(
+        "换算来源：导入参数（不是设备标定表）—— {vpl:.6} V/LSB、零点 {}",
+        scale.zero_lsb
+    );
+    Ok(())
+}
+
+/// 逐通道打印测量值。`Action::Measure` 与 `import` 共用，免得两处措辞漂移。
+fn print_measurements(capture: &Capture, scales: &[ChannelScale], targets: &[usize]) {
+    println!();
+    println!(
+        "测量  capture_id={}  {} 点  {:.3} ms",
+        capture.id,
+        capture.len(),
+        capture.duration_us() as f64 / 1000.0
+    );
+
+    for &ch in targets {
+        let scale = scales.get(ch).copied().unwrap_or_default();
+        // 「测不出」要写成「测不出」，不能写 0 —— 项目纪律：宁可说不知道
+        let Some(m) = scope_core::measure(capture, ch, &scale) else {
+            println!("  CH{}: 测不出（通道无数据）", ch + 1);
+            continue;
+        };
+        println!("  CH{}:", ch + 1);
+        println!(
+            "    Vpp={:.4} V  min={:.4} V  max={:.4} V  mean={:.4} V  AC-RMS={:.4} V  RMS={:.4} V",
+            m.vpp, m.min, m.max, m.mean, m.ac_rms, m.rms
+        );
+        let freq = match m.freq_hz {
+            Some(f) => format!("{f:.1} Hz"),
+            None => "测不出（无明显周期）".to_string(),
+        };
+        let duty = match m.duty_pct {
+            Some(d) => format!("{d:.1} %"),
+            None => "测不出".to_string(),
+        };
+        let rise = match m.rise_ns {
+            Some(r) => format!("{r:.1} ns"),
+            None => "测不出（没有干净的边沿）".to_string(),
+        };
+        let fall = match m.fall_ns {
+            Some(f) => format!("{f:.1} ns"),
+            None => "测不出（没有干净的边沿）".to_string(),
+        };
+        let over = match m.overshoot_pct {
+            Some(p) => format!("{p:.1} %"),
+            None => "测不出（无双电平参考）".to_string(),
+        };
+        let under = match m.undershoot_pct {
+            Some(p) => format!("{p:.1} %"),
+            None => "测不出（无双电平参考）".to_string(),
+        };
+        let high = match m.high_ns {
+            Some(h) => format!("{h:.1} ns"),
+            None => "测不出（没有高电平段）".to_string(),
+        };
+        println!("    频率={freq}  占空比={duty}  上升时间={rise}");
+        println!(
+            "    下降时间={fall}  过冲/下冲={over}/{under}  高电平脉宽={high}  跃变数={}",
+            m.edges
+        );
     }
 }
 
@@ -852,59 +1057,7 @@ fn run<P: DevicePort>(port: &mut P, action: Action) -> Result<()> {
             // 换算表按设备 uid 查；长度恒等于通道数，`to_csv` 的短表兜底路径不可达。
             let scales: ScaleSet = calib.scales_for(bus.info.as_ref().map(|i| &i.uid), ch_count);
 
-            println!();
-            println!(
-                "测量  capture_id={}  {} 点  {:.3} ms",
-                capture.id,
-                capture.len(),
-                capture.duration_us() as f64 / 1000.0
-            );
-
-            for ch in targets {
-                // 「测不出」要写成「测不出」，不能写 0 —— 项目纪律：宁可说不知道
-                let Some(m) = scope_core::measure(&capture, ch, &scales.get(ch)) else {
-                    println!("  CH{}: 测不出（通道无数据）", ch + 1);
-                    continue;
-                };
-                println!("  CH{}:", ch + 1);
-                println!(
-                    "    Vpp={:.4} V  min={:.4} V  max={:.4} V  mean={:.4} V  AC-RMS={:.4} V  RMS={:.4} V",
-                    m.vpp, m.min, m.max, m.mean, m.ac_rms, m.rms
-                );
-                let freq = match m.freq_hz {
-                    Some(f) => format!("{f:.1} Hz"),
-                    None => "测不出（无明显周期）".to_string(),
-                };
-                let duty = match m.duty_pct {
-                    Some(d) => format!("{d:.1} %"),
-                    None => "测不出".to_string(),
-                };
-                let rise = match m.rise_ns {
-                    Some(r) => format!("{r:.1} ns"),
-                    None => "测不出（没有干净的边沿）".to_string(),
-                };
-                let fall = match m.fall_ns {
-                    Some(f) => format!("{f:.1} ns"),
-                    None => "测不出（没有干净的边沿）".to_string(),
-                };
-                let over = match m.overshoot_pct {
-                    Some(p) => format!("{p:.1} %"),
-                    None => "测不出（无双电平参考）".to_string(),
-                };
-                let under = match m.undershoot_pct {
-                    Some(p) => format!("{p:.1} %"),
-                    None => "测不出（无双电平参考）".to_string(),
-                };
-                let high = match m.high_ns {
-                    Some(h) => format!("{h:.1} ns"),
-                    None => "测不出（没有高电平段）".to_string(),
-                };
-                println!("    频率={freq}  占空比={duty}  上升时间={rise}");
-                println!(
-                    "    下降时间={fall}  过冲/下冲={over}/{under}  高电平脉宽={high}  跃变数={}",
-                    m.edges
-                );
-            }
+            print_measurements(&capture, scales.as_slice(), &targets);
 
             println!();
             println!("{}", scales.summary_note());

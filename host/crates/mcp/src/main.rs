@@ -1,10 +1,10 @@
-//! # scope-mcp —— MCP Server（P3 阶段）
+﻿//! # scope-mcp —— MCP Server（P3 阶段）
 //!
-//! 把示波器能力以 **15 个粗粒度工具**暴露给 AI Agent。
+//! 把示波器能力以 **16 个粗粒度工具**暴露给 AI Agent。
 //!
 //! ## 状态
 //!
-//! 15 个工具**全部实现**（见 `session.rs`）。三种用法：
+//! 16 个工具**全部实现**（见 `session.rs`）。三种用法：
 //! 1. 默认：跑 stdio 上的 MCP server（换行分隔的 JSON-RPC 2.0）
 //! 2. `--list-tools`：打印工具清单与**由参数类型生成的** JSON Schema
 //! 3. `--selftest`：走一遍模拟器，确认命令层可用
@@ -14,7 +14,7 @@
 //!
 //! ## 设计约束（为什么是"粗粒度"）
 //!
-//! 15 个工具 ≈ 15 个**Agent 意图**，而不是 30+ 个逐命令工具。
+//! 16 个工具 ≈ 16 个**Agent 意图**，而不是 32 个逐命令工具。
 //! 后者会让工具列表爆炸，且一个意图要多次往返。
 //!
 //! ## 三层 token 防护（硬性，不可协商）
@@ -426,6 +426,15 @@ const TOOLS: &[ToolSpec] = &[
         |s, p| s.save_capture(&p)
     ),
     tool!(
+        "scope_import_capture",
+        "从 CSV 导入一次采集到本会话（不连设备）。首行 # rate_hz= 优先；两个电压参数都不给时按当前标定窗口换算，导入本项目导出文件可逐点还原。路径限工作目录内的 .csv。返回的 capture_id 可直接用于 scope_measure / scope_decode",
+        "无（本地读文件 + capture store）",
+        "总是",
+        ToolAnnotations::WRITES_HOST,
+        ImportCaptureArgs,
+        |s, p| s.import_capture(&p)
+    ),
+    tool!(
         "scope_watch",
         "在一段时间里连续采集，返回采集次数与缺口统计，外加第一次采集（供后续测量/解码）。设备侧流模式尚未实现",
         "ARM(stream) + 分片推送 + STOP",
@@ -751,6 +760,18 @@ fn print_tools() {
     }
 }
 
+/// 把工具的 `ToolError` 转成 `anyhow::Error`，供自检用。
+///
+/// `selftest` 走的是 CLI 风格的 `anyhow::Result`，而工具实现返回
+/// `Result<Value, ToolError>` —— 直接 `?` 会要求 `ToolError: StdError`。
+/// 这里把「怎么办」一并带上，自检失败时仍然能照着改。
+fn tool_err(e: session::ToolError) -> anyhow::Error {
+    match e.hint {
+        Some(h) => anyhow::anyhow!("{}（{h}）", e.message),
+        None => anyhow::anyhow!("{}", e.message),
+    }
+}
+
 /// 跑一遍完整链路，确认命令层真的可用。
 fn selftest() -> Result<()> {
     println!("== scope-mcp 自检 ==");
@@ -759,23 +780,23 @@ fn selftest() -> Result<()> {
     let mut bus = CommandBus::new(SimDevice::new(Scenario::I2c100k));
     let info = bus.connect()?;
     println!(
-        "[1/6] 连接成功: {} 通道, 上限 {} Hz",
+        "[1/7] 连接成功: {} 通道, 上限 {} Hz",
         info.ch_count, info.rate_max_hz
     );
 
     let actual = bus.set_sample_rate(857_143)?;
-    println!("[2/6] 采样率: 请求 857143 → 实际 {actual} Hz（已量化）");
+    println!("[2/7] 采样率: 请求 857143 → 实际 {actual} Hz（已量化）");
 
     bus.set_trigger(1, 0, 0, 2048, 1024, 1000)?;
     bus.set_acq(0, 1024, 0, 1)?;
-    println!("[3/6] 触发与采集参数已配置");
+    println!("[3/7] 触发与采集参数已配置");
 
     bus.arm()?;
     let ev = bus
         .wait_trigger(std::time::Duration::from_millis(2000))?
         .ok_or_else(|| anyhow::anyhow!("模拟器未产生触发事件"))?;
     let capture_id = u16::from_le_bytes([ev[0], ev[1]]);
-    println!("[4/6] 触发完成: capture_id={capture_id}");
+    println!("[4/7] 触发完成: capture_id={capture_id}");
 
     let mut store = CaptureStore::default();
     let mut cap = scope_core::Capture::new(capture_id, actual, 2, 1024);
@@ -810,7 +831,7 @@ fn selftest() -> Result<()> {
 
     let preview = c.preview(0, 32).unwrap();
     println!(
-        "[5/6] minmax 预览: {} 个桶 (每桶 {} 样点) — 这就是 Agent 默认能看到的粒度",
+        "[5/7] minmax 预览: {} 个桶 (每桶 {} 样点) — 这就是 Agent 默认能看到的粒度",
         preview.y_min.len(),
         preview.bucket
     );
@@ -842,7 +863,7 @@ fn selftest() -> Result<()> {
     let bytes = decoded.uart_bytes().unwrap_or_default();
     let head: Vec<String> = bytes.iter().take(3).map(|b| format!("{b:02X}")).collect();
     println!(
-        "[6/6] UART 解码: {} 帧（{} 帧 ok），首字节 {}，每比特 {:.2} 样点",
+        "[6/7] UART 解码: {} 帧（{} 帧 ok），首字节 {}，每比特 {:.2} 样点",
         decoded.frame_count(),
         decoded.quality.frame_ok,
         head.join(" "),
@@ -850,6 +871,51 @@ fn selftest() -> Result<()> {
     );
     if decoded.frame_count() == 0 {
         anyhow::bail!("UART 解码一帧都没解出 —— 解码链路坏了");
+    }
+
+    // ── CSV 导入回环（不连设备的那条路径）──
+    // 用刚采到的采集写出 CSV，再另起一个 Session 导入：验证的正是
+    // 「导出 → 导入」这条跨进程路径，而不是复用内存里的对象。
+    let scales = scope_core::ScaleSet::uncalibrated(c.channels.len());
+    let csv = c.to_csv(scales.as_slice());
+    // 导入工具只认工作目录内的 .csv（见 `session::csv_in_cwd`），
+    // 所以临时文件必须放在这里，而不是系统临时目录。
+    let path = std::env::current_dir()?.join("scope-mcp-selftest-import.csv");
+    std::fs::write(&path, &csv)?;
+    let mut imp = session::Session::new();
+    let v = imp
+        .import_capture(&ImportCaptureArgs {
+            path: path.display().to_string(),
+            rate_hz: None,
+            full_scale_v: None,
+            offset_v: None,
+            raw: None,
+            normalize_t0: None,
+        })
+        .map_err(tool_err)?;
+    let _ = std::fs::remove_file(&path);
+    let imported_id = v["capture_id"].as_u64().unwrap_or(0);
+    let m = imp
+        .measure(&MeasureArgs {
+            capture_id: imported_id,
+            metrics: None,
+            channel: None,
+        })
+        .map_err(tool_err)?;
+    println!(
+        "[7/7] CSV 导入: capture_id={imported_id}, {} Hz, {} 点, vpp={:.3} V",
+        v["rate_hz"],
+        v["samples"],
+        m["measurements"]["ch0"]["vpp_v"].as_f64().unwrap_or(0.0),
+    );
+    if v["rate_hz"].as_u64() != Some(actual as u64) {
+        anyhow::bail!("导入后的采样率与导出前不一致：{v}");
+    }
+    if v["samples"].as_u64() != Some(c.len() as u64) {
+        anyhow::bail!("导入后的点数与导出前不一致：{v}");
+    }
+    if m["schema"] != "analysis/v1" {
+        anyhow::bail!("导入的采集上做测量没走到统一分析对象：{m}");
     }
     println!();
     println!("自检通过。命令层与模拟器均可用。");

@@ -19,15 +19,16 @@
 
 use crate::params::{
     defaults, AcqMode, CaptureArgs, ConfigureArgs, ConnectArgs, Coupling, DebugRawArgs, DecodeArgs,
-    I2cDecodeArgs, MeasureArgs, MetricKind, ProtocolArg, ReadWaveformArgs, SampleFormat,
-    SaveCaptureArgs, SaveFormat, SimSetScenarioArgs, TransportArg, TriggerEdge, TriggerMode,
-    WatchArgs,
+    I2cDecodeArgs, ImportCaptureArgs, MeasureArgs, MetricKind, ProtocolArg, ReadWaveformArgs,
+    SampleFormat, SaveCaptureArgs, SaveFormat, SimSetScenarioArgs, TransportArg, TriggerEdge,
+    TriggerMode, WatchArgs,
 };
 use scope_core::acquire::MAX_TIMEOUT_MS;
 use scope_core::i2c_decode::{decode_capture, detect_channels, I2cDecodeConfig, Levels};
 use scope_core::{
-    acquire_cancellable, state_name, AcquireParams, CalibrationStore, Capture, CaptureStore, Cmd,
-    CommandBus, DeviceInfo, ScaleSet, ScopeError,
+    acquire_cancellable, from_csv, state_name, AcquireParams, CalibrationStore, Capture,
+    CaptureStore, Cmd, CommandBus, DeviceInfo, ImportOptions, RateSource, ScaleSet, ScopeError,
+    IMPORT_ID_BASE, IMPORT_ID_LIMIT,
 };
 use scope_device::{Transport, TransportKind};
 use scope_sim::Scenario;
@@ -187,6 +188,44 @@ fn level_lsb(
 /// 收窄成 `u8` —— 通道号、量程档位这类。
 fn u8_field(v: u64, field: &str) -> std::result::Result<u8, ToolError> {
     narrow(v, 0, 255, field, "取值范围 0..=255")
+}
+
+/// 校验导入路径：必须是 `.csv`，且（规范化后）落在当前工作目录内。
+///
+/// 这不是参数洁癖：`scope_import_capture` 把文件内容读进 capture store，
+/// 一个拼错的绝对路径就会让 Agent 拿到主机上不相干的文件。扩展名 + 工作
+/// 目录两道闸把「能读什么」收窄到用户主动放进去的那几个采集文件；
+/// 不接受 `..`、符号链接逃逸或隐式展开。
+fn csv_in_cwd(raw: &str) -> std::result::Result<std::path::PathBuf, ToolError> {
+    let p = std::path::Path::new(raw);
+    let is_csv = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+    if !is_csv {
+        return Err(ToolError {
+            message: format!("只接受 .csv 文件：{raw}"),
+            hint: Some("先用 scope_save_capture 导出 CSV，再把文件放到工作目录下".into()),
+        });
+    }
+
+    let canon = p.canonicalize().map_err(|e| ToolError {
+        message: format!("读 {raw} 失败：{e}"),
+        hint: Some("确认路径存在、有读权限，且在 scope-mcp 的工作目录内".into()),
+    })?;
+    // cwd 本身也可能是通过 `..` 或短路径拿到的；规范化后再比前缀。
+    let cwd = std::env::current_dir().map_err(|e| ToolError {
+        message: format!("取工作目录失败：{e}"),
+        hint: None,
+    })?;
+    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    if !canon.starts_with(&cwd) {
+        return Err(ToolError {
+            message: format!("路径不在工作目录内：{}", canon.display()),
+            hint: Some(format!("把文件复制到 {} 之后再导入", cwd.display())),
+        });
+    }
+    Ok(canon)
 }
 
 impl Session {
@@ -1271,6 +1310,80 @@ impl Session {
             "voltage_calibrated": scales.all_calibrated(),
             "note": "全量样点已落盘。不要在对话里读它 —— 4096 点 ≈ 上万 token",
         }))
+    }
+
+    /// `scope_import_capture` —— 从 CSV 导入一次采集到本会话。
+    ///
+    /// **不连设备**：读文件、解析、入 capture store。编号从
+    /// `[IMPORT_ID_BASE, IMPORT_ID_LIMIT)` 里挑一个没被占用的，与设备分配的
+    /// `1..n` 不会撞号。
+    ///
+    /// 两个电压换算参数都不给时，按**当前标定窗口**解释电压列 —— 那正是
+    /// `scope_save_capture` 写出的那套换算，所以「导出 → 另起会话导入」
+    /// 可以逐点还原。
+    ///
+    /// 路径经 [`csv_in_cwd`] 把关：只认工作目录内的 `.csv`。
+    pub fn import_capture(&mut self, p: &ImportCaptureArgs) -> R {
+        let path = csv_in_cwd(&p.path)?;
+        let text = std::fs::read_to_string(&path).map_err(|e| ToolError {
+            message: format!("读 {} 失败：{e}", path.display()),
+            hint: Some("确认路径存在且有读权限".into()),
+        })?;
+
+        let mut o = if p.full_scale_v.is_none() && p.offset_v.is_none() {
+            ImportOptions::from_scale(&self.calib_view.get(0))
+        } else {
+            ImportOptions::default()
+        };
+        o.id = self.next_import_id();
+        o.path = p.path.clone();
+        o.rate_hz = p.rate_hz;
+        if let Some(v) = p.full_scale_v {
+            o.full_scale_v = v;
+        }
+        if let Some(v) = p.offset_v {
+            o.offset_v = v;
+        }
+        o.raw = p.raw.unwrap_or(false);
+        o.normalize_t0 = p.normalize_t0.unwrap_or(false);
+
+        let imported = from_csv(&text, &o).map_err(|e| ToolError {
+            message: e.to_string(),
+            hint: Some(
+                "确认表头形如 `Time(s),CH1V`；速率写在首行 `# rate_hz=`，或显式给 rate_hz".into(),
+            ),
+        })?;
+
+        let id = imported.capture.id;
+        let rate = imported.capture.rate_hz;
+        let samples = imported.capture.len();
+        let channels = imported.capture.channels.len();
+        let rate_source = match imported.rate_source {
+            RateSource::Header => "header",
+            RateSource::Option => "option",
+            RateSource::TimeColumn => "time_column",
+        };
+        let t0_s = imported.t0_s;
+        self.store.push(imported.capture);
+
+        Ok(json!({
+            "capture_id": id,
+            "path": p.path,
+            "rate_hz": rate,
+            "rate_source": rate_source,
+            "samples": samples,
+            "channels": channels,
+            "t0_s": t0_s,
+            "voltage_calibrated": self.calib_view.all_calibrated(),
+            "note": "已进入本会话的 capture store；可直接用 scope_measure / scope_decode 引用这个 capture_id",
+        }))
+    }
+
+    /// 找一个没被占用的导入编号。
+    fn next_import_id(&self) -> u16 {
+        (IMPORT_ID_BASE..IMPORT_ID_LIMIT)
+            .find(|id| self.store.get(*id).is_none())
+            .unwrap_or(IMPORT_ID_BASE)
     }
 
     /// `scope_watch` —— 在一段时间里连续单次采集，返回滚动计数与缺口统计。
@@ -2492,6 +2605,85 @@ mod tests {
         );
         assert!(text.contains("Time(s)"), "CSV 表头不对");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn imported_capture_is_usable_by_measure_and_decode() {
+        // C5：导入的采集必须真的进了 store，且下游工具给出与原件一致的结论。
+        // 走的是**文件**这条路（导出 → 另起会话导入），不是内存里换引用。
+        let mut src = Session::new();
+        src.connect(&args(
+            json!({ "transport": "sim", "sim_scenario": "uart_115k" }),
+        ))
+        .unwrap();
+        let summary = src.capture(&args(json!({}))).unwrap();
+        let src_rate = summary["rate_hz"].as_u64().unwrap();
+        // 导入只认工作目录内的 .csv，所以不能写系统临时目录。
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("scope-mcp-test-import-roundtrip.csv");
+        let p = path.to_string_lossy().into_owned();
+        src.save_capture(&args(json!({ "capture_id": 1, "path": p })))
+            .unwrap();
+
+        let mut dst = Session::new();
+        let v = dst.import_capture(&args(json!({ "path": p }))).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let id = v["capture_id"].as_u64().unwrap();
+        assert!(
+            (IMPORT_ID_BASE as u64..IMPORT_ID_LIMIT as u64).contains(&id),
+            "导入采集应落在专用编号段，实际 {id}"
+        );
+        assert_eq!(v["rate_hz"].as_u64(), Some(src_rate), "速率来自首行注释");
+        assert_eq!(v["rate_source"], "header");
+
+        let m = dst.measure(&args(json!({ "capture_id": id }))).unwrap();
+        assert_eq!(m["schema"], "analysis/v1");
+        assert!(
+            !m["measurements"]["ch0"]["vpp_v"].is_null(),
+            "导入的采集应能测量：{m}"
+        );
+
+        let d = dst
+            .decode(&args(json!({
+                "capture_id": id,
+                "protocol": "uart",
+                "uart": { "baud": 115200 },
+            })))
+            .unwrap();
+        assert_eq!(d["schema"], "decode/uart-8n1");
+        assert!(
+            d["frame_count"].as_u64().unwrap() >= 3,
+            "导入的采集应能解码：{d}"
+        );
+        assert_eq!(d["bytes"][0], 0x55);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn import_only_accepts_csv_inside_the_working_directory() {
+        let mut s = Session::new();
+
+        // 1) 扩展名不对 —— 在读文件之前就该拒绝。
+        let e = s
+            .import_capture(&args(json!({ "path": "capture.txt" })))
+            .unwrap_err();
+        assert!(e.message.contains(".csv"), "实测：{}", e.message);
+
+        // 2) 存在、但是真实路径在 cwd 之外（系统临时目录）—— 必须拒绝。
+        let outside = std::env::temp_dir().join("scope-mcp-outside.csv");
+        std::fs::write(
+            &outside,
+            "# rate_hz=1000000\nTime(s),CH1V\n0.000000000,0.000000\n",
+        )
+        .unwrap();
+        let e = s
+            .import_capture(&args(json!({ "path": outside.to_string_lossy() })))
+            .unwrap_err();
+        let _ = std::fs::remove_file(&outside);
+        assert!(e.message.contains("不在工作目录内"), "实测：{}", e.message);
+        assert!(e.hint.is_some(), "越界路径要给出「怎么办」");
     }
 
     // ── 模拟器：seed 与 inject ────────────────────────────────────
