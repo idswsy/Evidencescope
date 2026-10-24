@@ -498,8 +498,9 @@ T3 实测 120.2 µs / 81.7 µs【T3】落在两个区间内。
 |---|---|---|---|
 | `slow_edge_noisy` | 1 kHz 双电平，上升/下降 10-90% 各 200 µs，幅度 2867 LSB，白噪声 σ = 40 LSB，固定种子 | 迟滞缺陷的 CI 回归 | 旧：~2.0–5.2 kHz（表 A.2）；新：1000 ± 2 Hz |
 | `ring_alias` | 振铃 f_d 高于 rate/4 的阶跃响应（半周期 < 2 样点） | 混叠拒答的 CI 回归 | 输出 `Refused(Aliased)`，不出频率数字 |
+| `clock_62k` | 62.5 kHz 双电平时钟，周期 13.71 样点，10–90% 3 样点，抖动按 `[0, +0.5, 0, −0.5]` 样点循环（4096 点内 298 条上升沿） | TIE 数值出口的正样本（F3） | ρ ≈ 2.55、σ ≈ 446 ns，`tie_sigma_ns` 为 `Ok{u}`；频率 62517.5 ± 50 Hz |
 
-**改动位置**：`sim/src/waveform.rs:12-88`（枚举 + 变体文档）、`:99-115`（`ALL` 数组，长度由 15 改为 17）、
+**改动位置**：`sim/src/waveform.rs:12-88`（枚举 + 变体文档）、`:99-115`（`ALL` 数组，长度由 15 改为 17（G3）→ 18（F3））、
 `:127-145`（`name()`）、`:300-377`（`next_sample` 分支）、`:660-745`（相邻构造函数）；
 `cli/src/main.rs:247-308`（`ScenarioArg` 枚举与 `From<ScenarioArg> for Scenario` 映射）、
 `:999-1010`（`scenario_list_matches_the_simulator` 测试）。
@@ -776,8 +777,9 @@ MCP 侧 `mcp/src/params.rs:146-172` 的 schema 由 `Scenario::parse` 生成，**
 1. **P3-T1/P3-T2 的场景不可行**。Q5 已冻结 `N_min = 30`，而 1 kHz 级场景在 4096 点内
    只有约 4 条同向沿（`pwm_1k_25` / `pwm_1k_75` / `pwm_1k_5` / `slow_edge_noisy`）；
    `uart_115k` 的边沿是瞬时跳变（`EdgeTooFastForTie`）；`i2c_100k` 的 SCL 实测上升
-   933 ns ≈ 0.8 样点（同样被物理门拒答）。因此**黄金场景中没有一个能给出 TIE 数值**，
-   全部按带原因的 `Refused` 导出。TIE 的真值核验改在 `tie.rs` 测试内用 128 沿合成
+   933 ns ≈ 0.8 样点（同样被物理门拒答）。因此**G3 落地时黄金场景中没有一个能给出
+   TIE 数值**，全部按带原因的 `Refused` 导出（F3 已补 `clock_62k`，见 §10.2）。
+   TIE 的真值核验改在 `tie.rs` 测试内用 128 沿合成
    时钟完成：`ρ ≈ 2.4` 的构造式真值（σ、均值、峰峰值、逐点 TIE/周期抖动，容差 1e-6 ns）
    与 `0.35 < ρ < 2` 的网格受限构造对账。
 2. **Q7-B 的替代**：`slow_edge_noisy` 达不到 N_min，无法实测 0.35 < ρ < 2 的偏差；
@@ -786,10 +788,10 @@ MCP 侧 `mcp/src/params.rs:146-172` 的 schema 由 `Scenario::parse` 生成，**
 3. **振铃上界**：单峰/半周期不足 4 样点时只给 `ring_freq_upper_hz`，出口用新增的
    `Verdict::BoundedAbove`（文本「上界: 振铃频率上界≤…」，瞬态行「振铃≤…」），
    不写成下界。
-4. **CLI `sim measure` 未接入瞬态/TIE 行**。G3 的出口按 HANDOFF §2.1-3 定为
+4. **G3 时 CLI `sim measure` 未接入瞬态/TIE 行**。G3 的出口按 HANDOFF §2.1-3 定为
    `AnalysisReport` → 证据包文本 / MCP `scope_measure`；`scope-cli sim measure`
-   仍只打印既有 `Measurements`。§6.2 里 `ring_alias` 的 CLI 期望（显示混叠拒答）
-   因此未落地 —— 该拒答路径由 `sim/src/waveform.rs::ring_alias_is_refused_as_aliased`
+   仍只打印既有 `Measurements`（F2 已接入，见 §10.2）。§6.2 里 `ring_alias` 的 CLI 期望
+   （显示混叠拒答）因此未落地 —— 该拒答路径由 `sim/src/waveform.rs::ring_alias_is_refused_as_aliased`
    与证据包/MCP 输出覆盖。
 
 **出口判决口径**（`analysis::VERDICT_KEYS` 共 31 键）：
@@ -810,6 +812,29 @@ MCP 侧 `mcp/src/params.rs:146-172` 的 schema 由 `Scenario::parse` 生成，**
 - `scope-mcp --selftest` 7/7；clippy `-D warnings` 与 `fmt --check` 干净。
 
 **未验证**：以上均为模拟器/合成数据结论，未上真机；不得据此写「在真实硬件上成立」。
+
+---
+
+### 10.2 F2/F3 落地记录（2026-10-24，同日补记）
+
+**F2 · CLI 出口**：`analysis::transient_tie_lines` 从 `channels_text` 原样抽出（文本未变，
+A2 五份黄金文本仍逐字节通过）；`scope-cli sim measure` 与 `import` 都复用该函数，
+不再各自拼措辞。`import` 用新增的 `ScaleSet::from_scales`（明确不算设备标定记录）。
+CLI 测试 `measurement_text_carries_transient_and_tie_lines` 钉住 `step_ring` 的
+瞬态六项与 `TIE: 测不出（边沿太少）`；`ring_alias` 的 CLI 显示仍无专门断言，
+其拒答路径继续由模拟器测试与证据包/MCP 覆盖。
+
+**F3 · `clock_62k` 场景**：新增 62.5 kHz 慢边沿时钟（周期 13.71 样点，10–90% 3 样点，
+抖动 `[0, +0.5, 0, −0.5]` 样点循环），4096 点给出 298 条上升沿。实测
+ρ = 2.55、σ = 446.5 ns、频率 62517.5 Hz，`tie_sigma_ns` 为 `Ok{±18.320 ns}` ——
+这是黄金场景第一次出现**数值** TIE。第 6 份黄金文本（4096 点，其余五份仍为 1024 点）
+与其对应；A2/A3 的场景清单同步为 6 个。
+
+**验收实测**：`cargo test --workspace` 465 passed / 5 ignored（G3 为 463 / 5）；
+clippy `-D warnings` 与 `fmt --check` 干净；`scope-mcp --selftest` 7/7。
+
+**未验证**：`clock_62k` 仍是模拟器波形；其 σ 只说明估计器在合成抖动下自洽，
+不代表真机时钟抖动精度。
 
 ---
 

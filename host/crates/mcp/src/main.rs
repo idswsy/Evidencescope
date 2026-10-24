@@ -1409,7 +1409,7 @@ mod tests {
             label(&connect, "sim_scenario"),
             "sine_1k_3v3|square_50k|pulse_glitch|noise|dc|am|i2c_100k|i2c_400k|i2c_nack|\
              pwm_1k_25|pwm_1k_75|pwm_1k_5|step_ring|rc_charge|uart_115k|\
-             slow_edge_noisy|ring_alias?"
+             slow_edge_noisy|ring_alias|clock_62k?"
         );
 
         // 可选数组、可选字符串

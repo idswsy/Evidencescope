@@ -2571,9 +2571,17 @@ mod tests {
     /// 全量，否则比较的是「请求了什么」而不是「同一份结论」。
     #[test]
     fn mcp_measure_and_evidence_text_agree_on_every_scalar() {
-        // 五个场景覆盖 Some / None 的所有组合：i2c 全有、sine 频率/占空比无、
-        // noise 下降沿与过冲无、step_ring 上升沿 / 频率无、uart 单通道。
-        for scenario in ["i2c_100k", "sine_1k_3v3", "step_ring", "noise", "uart_115k"] {
+        // 六个场景覆盖 Some / None 的所有组合：i2c 全有、sine 频率/占空比无、
+        // noise 下降沿与过冲无、step_ring 上升沿 / 频率无、uart 单通道、
+        // clock_62k 给出自然场景下唯一的数值 TIE。
+        for scenario in [
+            "i2c_100k",
+            "sine_1k_3v3",
+            "step_ring",
+            "noise",
+            "uart_115k",
+            "clock_62k",
+        ] {
             let mut s = Session::new();
             s.connect(&args(
                 json!({ "transport": "sim", "sim_scenario": scenario }),

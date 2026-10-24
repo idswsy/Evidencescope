@@ -99,6 +99,13 @@ pub enum Scenario {
     /// 直接测峰会报出看似正常、实际是混叠伪影的频率。该场景用于钉住
     /// `Refused(Aliased)` 这条拒答路径。
     RingAlias,
+    /// **慢边沿时钟**：62.5 kHz 方波，10–90% 约 2.4 个样点，逐沿按
+    /// `[0, +0.5, 0, −0.5]` 样点做固定周期抖动。
+    ///
+    /// 存在的理由：TIE 需要 ≥30 条同向沿，而 1 kHz 场景在 4096 点里只有
+    /// 约 4 条 —— 演示与材料里没有一条自然场景能报出数值 TIE。62.5 kHz
+    /// 在同样的窗里有约 298 条沿，且 ρ≈2.4 落在可信区。
+    Clock62k,
 }
 
 impl Scenario {
@@ -110,7 +117,7 @@ impl Scenario {
     /// 从前 `parse` 与 `name` 是**两份各写一遍的 match** —— 给某个场景改名时
     /// 只改一处，`parse` 认的名字与 `name()` 报出的名字就会悄悄分家，
     /// 而两边都编译得过。现在 `parse` 是从 `name()` 反向推出来的，分不了家。
-    pub const ALL: [Scenario; 17] = [
+    pub const ALL: [Scenario; 18] = [
         Scenario::Sine1k3v3,
         Scenario::Square50k,
         Scenario::PulseGlitch,
@@ -128,6 +135,7 @@ impl Scenario {
         Scenario::Uart115k,
         Scenario::SlowEdgeNoisy,
         Scenario::RingAlias,
+        Scenario::Clock62k,
     ];
 
     /// 从字符串解析（供 CLI / MCP 使用）。
@@ -159,6 +167,7 @@ impl Scenario {
             Scenario::Uart115k => "uart_115k",
             Scenario::SlowEdgeNoisy => "slow_edge_noisy",
             Scenario::RingAlias => "ring_alias",
+            Scenario::Clock62k => "clock_62k",
         }
     }
 
@@ -388,6 +397,8 @@ impl WaveformGen {
             SlowEdgeNoisy => slow_edge_noisy_at(t, &mut self.rng),
 
             RingAlias => ring_alias_at(t),
+
+            Clock62k => clock_62k_at(self.sample_index, rate_hz),
 
             I2c100k | I2c400k | I2cNack => {
                 let (scl, sda) = self.i2c.levels_at_ns(t_ns);
@@ -827,6 +838,47 @@ fn ring_alias_at(t: f64) -> f64 {
     base + AMP * (-since / TAU).exp() * (2.0 * std::f64::consts::PI * FD_HZ * since).sin()
 }
 
+/// 62.5 kHz 慢边沿时钟（`clock_62k`）。
+///
+/// 梯形波：0→100% 的边沿占 3 个样点（857142 Hz 下 10→90% 约 2.4 样点），
+/// 高/低平台各约 3.86 个样点。每个上升沿按 `[0, +0.5, 0, −0.5]` 样点
+/// 循环偏移，制造一个**确定**的周期抖动；下降沿不抖 —— 抖动来自时钟源，
+/// 不是占空比调制。
+///
+/// 只由绝对样点号求值、不记状态：采集窗从哪里开始都得到同一段波形。
+fn clock_62k_at(sample_index: u64, rate_hz: u32) -> f64 {
+    /// 时钟频率。
+    const HZ: f64 = 62_500.0;
+    /// 0→100% 的边沿宽度（样点，按 857142 Hz 计）。
+    const EDGE_SAMPLES: f64 = 3.0;
+    /// 逐沿周期抖动（样点）。
+    const JITTER: [f64; 4] = [0.0, 0.5, 0.0, -0.5];
+    const LO: f64 = 800.0;
+    const HI: f64 = 2800.0;
+
+    let p = rate_hz.max(1) as f64 / HZ;
+    let x = sample_index as f64;
+    let k = (x / p).floor() as i64;
+    let half = EDGE_SAMPLES / 2.0;
+    let rise = |k: i64| k as f64 * p + JITTER[k.rem_euclid(JITTER.len() as i64) as usize];
+    let fall = |k: i64| k as f64 * p + p / 2.0;
+
+    let (r, f, r_next) = (rise(k), fall(k), rise(k + 1));
+    // 三条候选沿覆盖一个周期内的所有斜坡：本周期升、本周期降、下周期升。
+    // 其余位置按最近一次已完成的沿取平台电平。
+    if (x - r).abs() <= half {
+        LO + (HI - LO) * ((x - r) / EDGE_SAMPLES + 0.5)
+    } else if (x - f).abs() <= half {
+        HI - (HI - LO) * ((x - f) / EDGE_SAMPLES + 0.5)
+    } else if (x - r_next).abs() <= half {
+        LO + (HI - LO) * ((x - r_next) / EDGE_SAMPLES + 0.5)
+    } else if x >= r && x < f {
+        HI
+    } else {
+        LO
+    }
+}
+
 /// 循环发送的字节序列。
 ///
 /// 三个值刻意选得**位模式差别大**：`0x55` 全交替、`0x0F` 半边、`0xA5` 混合。
@@ -922,7 +974,7 @@ mod tests {
         // 数量写死是有意的：它逼你在加变体时回来把数字和 `ALL` 一起改。
         assert_eq!(
             Scenario::ALL.len(),
-            17,
+            18,
             "场景数变了 —— 请同步更新 Scenario::ALL 和这个数字"
         );
 
@@ -1501,6 +1553,57 @@ mod tests {
             Some(&scope_core::TransientReason::Aliased),
             "应拒答为 Aliased；实际原因 {:?}",
             a.reasons.get("ring_freq_hz")
+        );
+    }
+
+    /// F3：自然场景（不是测试构造）必须能报出数值 TIE。
+    ///
+    /// 1 kHz 场景在 4096 点里只有约 4 条同向沿，达不到 N_min = 30；
+    /// `clock_62k` 用 62.5 kHz、10–90% ≈ 2.4 样点，既有足够多的沿，
+    /// 又落在 ρ ≥ 2 的可信区。
+    ///
+    /// 变异：把抖动模式清零 → σ_TIE 掉到 0，红；
+    /// 变异：把边沿加快到一个样点以内 → 先被 EdgeTooFastForTie 拒答，红。
+    #[test]
+    fn clock_62k_reports_a_numeric_tie() {
+        let cap = capture_of(Scenario::Clock62k, 4096);
+        let a = scope_core::tie::analyze(&cap.channels[0], RATE);
+        assert!(a.reason.is_none(), "自然场景不应拒答：{:?}", a.reason);
+        let t = a.stats.expect("应给出 TIE 统计量");
+        assert!(
+            (295..=300).contains(&t.n_edges),
+            "同向沿数 {}，4.78 ms 的 62.5 kHz 时钟应约 298 条",
+            t.n_edges
+        );
+        assert!((2.0..=3.5).contains(&t.rho), "ρ={} 应进入 T2 可信区", t.rho);
+        assert!(!t.grid_limited, "ρ={} 不应再标网格受限", t.rho);
+        // 固定抖动模式 [0, +0.5, 0, −0.5] 样点 → σ≈0.354 样点≈413 ns。
+        assert!(
+            (300.0..=500.0).contains(&t.sigma_tie_ns),
+            "σ_TIE={} ns，固定 ±0.5 样点抖动应给出约 413 ns",
+            t.sigma_tie_ns
+        );
+
+        let report = scope_core::AnalysisReport::from_capture(
+            &cap,
+            &scope_core::ScaleSet::uncalibrated(1),
+            "sim(clock_62k)",
+            true,
+        );
+        assert!(
+            matches!(
+                report.channels[0].quality.verdicts.get("tie_sigma_ns"),
+                Some(scope_core::Verdict::Ok { .. })
+            ),
+            "TIE σ 有模型，判决必须是 Ok：{:?}",
+            report.channels[0].quality.verdicts.get("tie_sigma_ns")
+        );
+
+        let m = measured(Scenario::Clock62k, 4096);
+        let f = m.freq_hz.expect("62.5 kHz 时钟必须测得出频率");
+        assert!(
+            (f - 62_500.0).abs() < 50.0,
+            "频率实测 {f:.1} Hz，场景定义是 62.5 kHz"
         );
     }
 

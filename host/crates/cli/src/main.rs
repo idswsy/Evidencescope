@@ -394,6 +394,9 @@ enum ScenarioArg {
     /// 400 kHz 混叠振铃 —— 用于验证 Refused(Aliased)
     #[value(name = "ring_alias")]
     RingAlias,
+    /// 62.5 kHz 慢边沿时钟 —— 自然场景里唯一能报出数值 TIE 的
+    #[value(name = "clock_62k")]
+    Clock62k,
 }
 
 impl From<ScenarioArg> for Scenario {
@@ -416,6 +419,7 @@ impl From<ScenarioArg> for Scenario {
             ScenarioArg::Uart115k => Scenario::Uart115k,
             ScenarioArg::SlowEdgeNoisy => Scenario::SlowEdgeNoisy,
             ScenarioArg::RingAlias => Scenario::RingAlias,
+            ScenarioArg::Clock62k => Scenario::Clock62k,
         }
     }
 }

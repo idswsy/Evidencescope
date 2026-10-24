@@ -1,4 +1,4 @@
-//! A2：5 个代表场景的证据包黄金文本逐字节比对。
+//! A2：6 个代表场景的证据包黄金文本逐字节比对。
 //!
 //! # 为什么需要它
 //!
@@ -13,7 +13,7 @@
 //! `scope-sim` 依赖 `scope-core`，能同时拿到模拟器与 `build_evidence`；
 //! 反过来放在 core 里会形成循环依赖。
 //!
-//! # 为什么这 5 个场景
+//! # 为什么这 6 个场景
 //!
 //! 覆盖证据包里所有会「分叉」的渲染路径：
 //!
@@ -24,6 +24,7 @@
 //! | `noise` | 判不出与 `Refused`：**不得**给 `Ok` 判决的负样本 |
 //! | `i2c_100k` | 双通道 + I²C 帧表、告警原文、通道来源 |
 //! | `uart_115k` | 单通道 + UART 帧/字节、真机形态 |
+//! | `clock_62k` | 自然场景的数值 TIE：边沿数、σ、CI95、周期抖动 |
 //!
 //! # 确定性
 //!
@@ -39,7 +40,7 @@
 //! SCOPE_UPDATE_EVIDENCE_GOLDEN=1 cargo test -p scope-sim --test evidence_golden
 //! ```
 //!
-//! 然后**逐行审阅** `git diff` —— 这条命令会重写全部 5 个文件，
+//! 然后**逐行审阅** `git diff` —— 这条命令会重写全部 6 个文件，
 //! 它不判断新文本是否更好，只负责把「当前输出」记下来。
 
 use scope_core::decoder::{decode, DecodeParams, DecodeRequest, Protocol, UartConfig};
@@ -48,10 +49,10 @@ use scope_sim::{Scenario, SimDevice};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// 采集参数与 CLI/MCP 的默认一致：857142 Hz、1024 点、中点触发。
-fn acquire_params() -> AcquireParams {
+/// 采集参数与 CLI/MCP 的默认一致：857142 Hz、中点触发。
+fn acquire_params(samples: u16) -> AcquireParams {
     AcquireParams {
-        samples: 1024,
+        samples,
         rate_hz: 857_142,
         trigger_level_lsb: 2048,
         timeout: Duration::from_secs(3),
@@ -62,11 +63,12 @@ fn acquire_params() -> AcquireParams {
 ///
 /// `decode` 为 `Some` 时把解码结果与请求一并交给证据包 —— 这正是
 /// MCP/GUI 的真实调用形状（`decode_req` 用来回显通道/门限）。
-fn evidence_for(scenario: Scenario, req: Option<&DecodeRequest>) -> String {
+fn evidence_for(scenario: Scenario, req: Option<&DecodeRequest>, samples: u16) -> String {
     let mut bus = CommandBus::new(SimDevice::new(scenario));
     bus.connect().expect("模拟器连接不该失败");
 
-    let capture = scope_core::acquire(&mut bus, &acquire_params()).expect("模拟器采集不该失败");
+    let capture =
+        scope_core::acquire(&mut bus, &acquire_params(samples)).expect("模拟器采集不该失败");
     let scales = ScaleSet::uncalibrated(capture.channels.len());
     let decoded = req.map(|r| decode(&capture, r).expect("模拟器场景应当可解码"));
     let config = bus.config.clone();
@@ -89,6 +91,8 @@ struct Case {
     /// 黄金文件名（不含目录）。
     file: &'static str,
     scenario: Scenario,
+    /// 采集点数。TIE 场景用 4096 点（约 298 条同向沿），其余沿用默认 1024。
+    samples: u16,
     /// `None` 表示这次不看解码段。
     decode: Option<fn() -> DecodeRequest>,
 }
@@ -117,27 +121,38 @@ fn cases() -> Vec<Case> {
         Case {
             file: "sine_1k_3v3.txt",
             scenario: Scenario::Sine1k3v3,
+            samples: 1024,
             decode: None,
         },
         Case {
             file: "step_ring.txt",
             scenario: Scenario::StepRing,
+            samples: 1024,
             decode: None,
         },
         Case {
             file: "noise.txt",
             scenario: Scenario::Noise,
+            samples: 1024,
             decode: None,
         },
         Case {
             file: "i2c_100k.txt",
             scenario: Scenario::I2c100k,
+            samples: 1024,
             decode: Some(i2c_request),
         },
         Case {
             file: "uart_115k.txt",
             scenario: Scenario::Uart115k,
+            samples: 1024,
             decode: Some(uart_request),
+        },
+        Case {
+            file: "clock_62k.txt",
+            scenario: Scenario::Clock62k,
+            samples: 4096,
+            decode: None,
         },
     ]
 }
@@ -155,7 +170,7 @@ fn evidence_text_matches_golden_byte_for_byte() {
 
     for case in cases() {
         let req = case.decode.map(|f| f());
-        let got = evidence_for(case.scenario, req.as_ref());
+        let got = evidence_for(case.scenario, req.as_ref(), case.samples);
         let path = dir.join(case.file);
 
         if update {
