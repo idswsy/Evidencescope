@@ -829,6 +829,23 @@ mod tests {
             "含噪 TIE σ={} ns 不在预期量级",
             t.sigma_tie_ns
         );
+
+        // 钉住 κ 本身（docs/11 §10 冻结裁决取 1.021，对外承诺 ≥90× 改善）。
+        // 期望值在**测试里**用字面量 1.021 独立复算，不读 `KAPPA` 常量 ——
+        // 否则常量改成任何值测试都绿（审查变异实测：1.021 → 0.884 时旧的
+        // 区间断言 (3.0..=8.0) 抓不住）。
+        let sigma_v = sigma_hat(&s).expect("含噪场景应能估出 σ̂");
+        let (lo, hi) = s
+            .iter()
+            .fold((u16::MAX, u16::MIN), |(l, h), &v| (l.min(v), h.max(v)));
+        let expected = 1.021 * (sigma_v / (hi - lo) as f64) * t.rho * (1e9 / RATE as f64);
+        assert!(
+            (t.resolution_floor_ns - expected).abs() < 1e-9,
+            "单沿地板 {} ns 与 κ=1.021 的复算值 {} ns 不一致 —— \
+             KAPPA 常量偏离了冻结裁决",
+            t.resolution_floor_ns,
+            expected
+        );
     }
 
     #[test]
