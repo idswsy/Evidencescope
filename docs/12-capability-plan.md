@@ -302,7 +302,7 @@ Time(s),CH1V,CH2V
 | **时间原点** | `Time(s)` 首值偏离 0 超过 1 个采样间隔时：默认拒绝（`NonZeroTimeOrigin`），`--normalize-t0` 时归一化并在 `Provenance` 记录原始偏移 |
 | 通道列 | `CH<n>V` 或 `CH<n>`；`CH<n>` 视为原始 LSB（等价 `--raw`）。超过 4 通道报 `TooManyChannels` |
 | 采样率上限 | `Capture::rate_hz` 是 `u32`。非整数或超过 `u32::MAX` 报 `RateUnsupported`，**不取整**（取整会让时间轴静默错误） |
-| 电压反推 | `lsb = round((v − offset) / full_scale × (2^bits − 1))`，越界 [0, 4095] 报 `OutOfRange`；缺省 3.3 V / 12 bit / offset = 0 |
+| 电压反推 | `lsb = round((v − offset) / full_scale × 4096)`，`offset` 是**码值 0 对应的电压**；越界 [0, 4095] 报 `OutOfRange`；缺省 3.3 V / 12 bit / offset = 0（单极性）。导入本项目导出的双极性文件时用 `ImportOptions::from_scale` 折算（`offset = −zero_lsb × volts_per_lsb`，默认 −1.65 V），C1 的 round-trip 靠它 |
 | 采集编号 | 导入采集使用 `id ∈ [40000, 60000)`，与设备分配的编号段隔离，避免 `CaptureStore` 同号覆盖 |
 | 数据来源标记 | `Capture` 增加 `source: CaptureSource`（`Device | Simulator | File{path}`），`Provenance` 直接取它 |
 

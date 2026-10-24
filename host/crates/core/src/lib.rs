@@ -41,6 +41,7 @@ pub mod device;
 mod edges;
 pub mod error;
 pub mod i2c_decode;
+pub mod import;
 pub mod measure;
 pub mod persist;
 pub mod report;
@@ -75,6 +76,10 @@ pub use error::{DeviceError, LinkError, Result, ScopeError};
 pub use i2c_decode::{
     decode, decode_capture, detect_channels, Address, Event, EventKind, I2cDecode, I2cDecodeConfig,
     I2cWarning, Levels, SignalQuality, Transaction,
+};
+pub use import::{
+    from_csv, ImportError, ImportOptions, ImportedCapture, RateSource, DEFAULT_FULL_SCALE_V,
+    IMPORT_ID_BASE, IMPORT_ID_LIMIT, MAX_IMPORT_CHANNELS,
 };
 pub use measure::{measure, Measurements};
 pub use report::{build_evidence, EvidenceInput, MAX_CHARS, MAX_FRAMES, PREVIEW_POINTS};
