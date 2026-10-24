@@ -226,6 +226,76 @@ enum Action {
         #[arg(long)]
         channel: Option<usize>,
     },
+
+    /// 采一次并解码：I²C 帧序列（需 2 通道）或 UART 8N1 字节流（需 1 通道）
+    Decode {
+        /// 波形场景（**仅模拟器有效**；接真机时忽略）
+        #[arg(long, value_enum, default_value_t = ScenarioArg::Uart115k)]
+        scenario: ScenarioArg,
+
+        /// 解码协议
+        #[arg(long, value_enum, default_value_t = DecodeProtocol::Uart)]
+        protocol: DecodeProtocol,
+
+        /// 采样点数（F103 上限 4096）
+        #[arg(short = 'n', long, default_value_t = 4096)]
+        samples: u16,
+
+        /// 采样率（Hz）。设备会量化到最近档位并回显实际值
+        #[arg(long, default_value_t = 857_142)]
+        rate: u32,
+
+        /// 触发电平（ADC LSB，12-bit 范围 0..4095）
+        #[arg(long, default_value_t = 2048)]
+        level: u16,
+
+        /// 超时（毫秒）
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+
+        /// UART 波特率（8N1）
+        #[arg(long, default_value_t = 115_200)]
+        baud: u32,
+
+        /// UART 通道号（0 起）。省略用通道 0
+        #[arg(long)]
+        channel: Option<usize>,
+
+        /// I²C SCL 通道（0 起）。与 --sda 一起省略时自动判定
+        #[arg(long)]
+        scl: Option<usize>,
+
+        /// I²C SDA 通道（0 起）
+        #[arg(long)]
+        sda: Option<usize>,
+
+        /// I²C 高电平门限（ADC LSB）。省略用 0.7·VDD
+        #[arg(long)]
+        vih: Option<u16>,
+
+        /// I²C 低电平门限（ADC LSB）。省略用 0.3·VDD
+        #[arg(long)]
+        vil: Option<u16>,
+
+        /// I²C 去抖时间（ns）
+        #[arg(long, default_value_t = 50)]
+        debounce_ns: u32,
+
+        /// 输出解码文本路径
+        #[arg(short = 'o', long)]
+        out: Option<String>,
+    },
+}
+
+/// `decode` 子命令的协议选择。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum DecodeProtocol {
+    /// I²C 总线（需 2 通道）
+    #[value(name = "i2c")]
+    I2c,
+    /// UART 8N1（需 1 通道，真机可用）
+    #[value(name = "uart")]
+    Uart,
 }
 
 impl Action {
@@ -236,7 +306,8 @@ impl Action {
         match self {
             Action::Capture { scenario, .. }
             | Action::I2c { scenario, .. }
-            | Action::Measure { scenario, .. } => *scenario,
+            | Action::Measure { scenario, .. }
+            | Action::Decode { scenario, .. } => *scenario,
             _ => ScenarioArg::Sine1k3v3,
         }
     }
@@ -714,82 +785,44 @@ fn run<P: DevicePort>(port: &mut P, action: Action) -> Result<()> {
             out,
         } => {
             let capture = capture_once(&mut bus, samples, rate, 2048, timeout_ms, false)?;
-
-            // I2C 解码至少要两条线。单通道场景（如 dc / sine_1k_3v3）在这里
-            // 就要说清楚，而不是等 decode_capture 报一个「通道越界」让人猜。
-            if capture.channels.len() < 2 {
-                bail!(
-                    "I2C 解码需要至少 2 个通道，当前场景只有 {} 个。\n\
-                     可以试试：\n  \
-                     • 换用双通道场景：--scenario i2c_100k 或 i2c_400k\n  \
-                     · 接真机时确认 GET_INFO 上报的 ch_count ≥ 2",
-                    capture.channels.len()
-                );
-            }
-
-            let levels = match (vih, vil) {
-                (Some(h), Some(l)) => Levels {
-                    vih_lsb: h,
-                    vil_lsb: l,
-                },
-                (Some(h), None) => Levels {
-                    vih_lsb: h,
-                    vil_lsb: Levels::default_ratio().vil_lsb,
-                },
-                (None, Some(l)) => Levels {
-                    vih_lsb: Levels::default_ratio().vih_lsb,
-                    vil_lsb: l,
-                },
-                (None, None) => Levels::default_ratio(),
-            };
-            println!(
-                "# 门限: VIH={} VIL={} LSB（判决带内不硬判 0/1）",
-                levels.vih_lsb, levels.vil_lsb
-            );
-
-            // 通道：显式指定优先；都省略时自动判定，并把判定结果告诉用户
-            let (scl_ch, sda_ch) = match (scl, sda) {
-                (Some(a), Some(b)) => (a, b),
-                (Some(a), None) => (a, if a == 0 { 1 } else { 0 }),
-                (None, Some(b)) => (if b == 0 { 1 } else { 0 }, b),
-                (None, None) => match scope_core::detect_channels(&capture, levels, debounce_ns) {
-                    Some((a, b)) => {
-                        println!("# 自动判定: SCL=CH{}  SDA=CH{}", a + 1, b + 1);
-                        (a, b)
-                    }
-                    None => {
-                        println!("# 自动判定失败（两条线都没有边沿）；按默认 CH1=SCL CH2=SDA 继续");
-                        (0, 1)
-                    }
-                },
-            };
-
-            let cfg = I2cDecodeConfig {
-                scl_channel: scl_ch,
-                sda_channel: sda_ch,
-                levels,
-                debounce_ns,
-            };
-            let result = scope_core::decode_capture(&capture, &cfg)?;
-
-            println!();
-            print!("{}", result.to_text());
-
-            let bytes = result.all_bytes();
-            if !bytes.is_empty() {
-                let hex: Vec<String> = bytes.iter().map(|b| format!("0x{b:02X}")).collect();
-                println!("\n数据字节: [{}]", hex.join(", "));
-            }
-
-            if let Some(path) = out {
-                let text = result.to_text();
-                std::fs::write(&path, text.as_bytes())
-                    .with_context(|| format!("无法写入 {path}"))?;
-                println!("已写出 {path}");
-            }
-
-            Ok(())
+            decode_i2c_capture(&capture, scl, sda, vih, vil, debounce_ns, out)
         }
+
+        Action::Decode {
+            scenario: _,
+            protocol,
+            samples,
+            rate,
+            level,
+            timeout_ms,
+            baud,
+            channel,
+            scl,
+            sda,
+            vih,
+            vil,
+            debounce_ns,
+            out,
+        } => match protocol {
+            DecodeProtocol::I2c => {
+                let capture = capture_once(&mut bus, samples, rate, level, timeout_ms, false)?;
+                decode_i2c_capture(&capture, scl, sda, vih, vil, debounce_ns, out)
+            }
+            DecodeProtocol::Uart => {
+                // 触发：0 = auto，1 = falling。UART 空闲为高、起始位为低，
+                // 起始位本身就是一个下降沿；默认的 normal + rising 等不到它。
+                let capture = capture_once_with_trigger(
+                    &mut bus,
+                    samples,
+                    rate,
+                    level,
+                    timeout_ms,
+                    true,
+                    Some((0, 1)),
+                )?;
+                decode_uart_capture(&capture, channel, baud, out)
+            }
+        },
 
         Action::Measure {
             // 场景在 main() 里已经用来构造模拟器了，这里用不上
@@ -882,9 +915,140 @@ fn run<P: DevicePort>(port: &mut P, action: Action) -> Result<()> {
     }
 }
 
+/// I²C 解码的共用实现（`i2c` 子命令与 `decode --protocol i2c` 同一份）。
+fn decode_i2c_capture(
+    capture: &Capture,
+    scl: Option<usize>,
+    sda: Option<usize>,
+    vih: Option<u16>,
+    vil: Option<u16>,
+    debounce_ns: u32,
+    out: Option<String>,
+) -> Result<()> {
+    // I2C 解码至少要两条线。单通道场景（如 dc / sine_1k_3v3）在这里
+    // 就要说清楚，而不是等 decode_capture 报一个「通道越界」让人猜。
+    if capture.channels.len() < 2 {
+        bail!(
+            "I2C 解码需要至少 2 个通道，当前场景只有 {} 个。\n\
+             可以试试：\n  \
+             • 换用双通道场景：--scenario i2c_100k 或 i2c_400k\n  \
+             · 接真机时确认 GET_INFO 上报的 ch_count ≥ 2",
+            capture.channels.len()
+        );
+    }
+
+    let levels = match (vih, vil) {
+        (Some(h), Some(l)) => Levels {
+            vih_lsb: h,
+            vil_lsb: l,
+        },
+        (Some(h), None) => Levels {
+            vih_lsb: h,
+            vil_lsb: Levels::default_ratio().vil_lsb,
+        },
+        (None, Some(l)) => Levels {
+            vih_lsb: Levels::default_ratio().vih_lsb,
+            vil_lsb: l,
+        },
+        (None, None) => Levels::default_ratio(),
+    };
+    println!(
+        "# 门限: VIH={} VIL={} LSB（判决带内不硬判 0/1）",
+        levels.vih_lsb, levels.vil_lsb
+    );
+
+    // 通道：显式指定优先；都省略时自动判定，并把判定结果告诉用户
+    let (scl_ch, sda_ch) = match (scl, sda) {
+        (Some(a), Some(b)) => (a, b),
+        (Some(a), None) => (a, if a == 0 { 1 } else { 0 }),
+        (None, Some(b)) => (if b == 0 { 1 } else { 0 }, b),
+        (None, None) => match scope_core::detect_channels(capture, levels, debounce_ns) {
+            Some((a, b)) => {
+                println!("# 自动判定: SCL=CH{}  SDA=CH{}", a + 1, b + 1);
+                (a, b)
+            }
+            None => {
+                println!("# 自动判定失败（两条线都没有边沿）；按默认 CH1=SCL CH2=SDA 继续");
+                (0, 1)
+            }
+        },
+    };
+
+    let cfg = I2cDecodeConfig {
+        scl_channel: scl_ch,
+        sda_channel: sda_ch,
+        levels,
+        debounce_ns,
+    };
+    let result = scope_core::decode_capture(capture, &cfg)?;
+
+    println!();
+    print!("{}", result.to_text());
+
+    let bytes = result.all_bytes();
+    if !bytes.is_empty() {
+        let hex: Vec<String> = bytes.iter().map(|b| format!("0x{b:02X}")).collect();
+        println!("\n数据字节: [{}]", hex.join(", "));
+    }
+
+    if let Some(path) = out {
+        let text = result.to_text();
+        std::fs::write(&path, text.as_bytes()).with_context(|| format!("无法写入 {path}"))?;
+        println!("已写出 {path}");
+    }
+
+    Ok(())
+}
+
+/// UART 8N1 解码（`decode --protocol uart`）。
+fn decode_uart_capture(
+    capture: &Capture,
+    channel: Option<usize>,
+    baud: u32,
+    out: Option<String>,
+) -> Result<()> {
+    let ch = channel.unwrap_or(0);
+    let n = capture.channels.len();
+    if ch >= n {
+        bail!(
+            "--channel {ch} 超出范围：本次采集只有 {n} 个通道（0..={}）",
+            n.saturating_sub(1)
+        );
+    }
+
+    let req = scope_core::decoder::DecodeRequest {
+        protocol: scope_core::decoder::Protocol::Uart,
+        channels: vec![ch],
+        params: scope_core::decoder::DecodeParams::Uart(scope_core::decoder::UartConfig {
+            baud,
+            ..scope_core::decoder::UartConfig::default()
+        }),
+    };
+    let result = scope_core::decoder::decode(capture, &req)?;
+
+    println!();
+    println!(
+        "# UART 8N1: capture_id={}  {} 点  {:.3} ms  采样率 {} Hz  CH{}",
+        capture.id,
+        capture.len(),
+        capture.duration_us() as f64 / 1000.0,
+        capture.rate_hz,
+        ch + 1
+    );
+    print!("{}", result.uart_text());
+
+    if let Some(path) = out {
+        let text = result.uart_text();
+        std::fs::write(&path, text.as_bytes()).with_context(|| format!("无法写入 {path}"))?;
+        println!("\n已写出 {path}");
+    }
+
+    Ok(())
+}
+
 /// 跑一次完整采集：连接 → 配置 → 武装 → 等触发 → 分片拉取。
 ///
-/// `capture` 与 `i2c` 两个动作共用 —— 采集逻辑只写一遍，
+/// `capture` / `i2c` / `measure` / `decode` 四个动作共用 —— 采集逻辑只写一遍，
 /// 免得解码那条路上的分片处理与落盘那条路走出两个版本的 bug。
 ///
 /// `quiet = true` 时跳过函数内部的打印 —— 连续采集的中间帧用，
@@ -901,7 +1065,30 @@ fn capture_once<D: DevicePort>(
     timeout_ms: u64,
     quiet: bool,
 ) -> scope_core::Result<Capture> {
+    capture_once_with_trigger(bus, samples, rate, level, timeout_ms, quiet, None)
+}
+
+/// [`capture_once`] 的可选触发覆盖。
+///
+/// `trigger = Some((mode, edge))` 时在 `acquire` 之前显式下发一次
+/// `SET_TRIGGER` —— `acquire` 沿用的是**设备当前配置**，所以这次下发会被它
+/// 原样沿用。UART 需要 auto 模式 + 下降沿（起始位是下降沿），而默认配置
+/// 是 normal + 上升沿，会一直等不到触发。
+fn capture_once_with_trigger<D: DevicePort>(
+    bus: &mut CommandBus<D>,
+    samples: u16,
+    rate: u32,
+    level: u16,
+    timeout_ms: u64,
+    quiet: bool,
+    trigger: Option<(u8, u8)>,
+) -> scope_core::Result<Capture> {
     bus.connect()?;
+
+    if let Some((mode, edge)) = trigger {
+        let pre = (samples / 2).min(2048);
+        bus.set_trigger(mode, 0, edge, level, pre, 1000)?;
+    }
 
     // 采集编排在 core 里（`scope_core::acquire`）—— 它替我们处理了
     // EVENT_TRIGGER 的 18 字节解析、分片上限、以及「没有触发点」的哨兵映射。

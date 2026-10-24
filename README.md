@@ -164,7 +164,10 @@ F103/
 
 # 3. 查看 I2C 双通道解码
 ./host/run.sh run -p scope-cli -- sim capture --scenario i2c_100k -n 2048 -o i2c.csv
-./host/run.sh run -p scope-cli -- sim i2c --scenario i2c_100k -n 4096
+./host/run.sh run -p scope-cli -- sim decode --protocol i2c --scenario i2c_100k -n 4096
+
+# 3c. UART 8N1 单通道解码（真机 1 通道可用的那条路径）
+./host/run.sh run -p scope-cli -- sim decode --protocol uart --scenario uart_115k -n 4096
 
 # 3b. 非 I2C 波形（共 15 个场景）：PWM 占空比 / 阶跃响应（过冲+振铃）/ RC / UART
 ./host/run.sh run -p scope-cli -- measure --scenario pwm_1k_25

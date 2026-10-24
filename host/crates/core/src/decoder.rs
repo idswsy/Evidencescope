@@ -213,6 +213,56 @@ impl DecodedFrames {
                 .collect(),
         )
     }
+
+    /// UART 解码结果的人读文本（CLI / 证据包共用）。
+    ///
+    /// I²C 结果返回空串 —— I²C 的文本仍由 [`i2c_decode::I2cDecode::to_text`]
+    /// 负责，两种协议不共用一套措辞。
+    pub fn uart_text(&self) -> String {
+        use std::fmt::Write as _;
+        if self.protocol != Protocol::Uart {
+            return String::new();
+        }
+        let mut s = String::new();
+        let _ = writeln!(s, "UART 8N1 解码结果");
+        let _ = writeln!(
+            s,
+            "共 {} 帧（{} 帧通过停止位校验）",
+            self.frame_count(),
+            self.quality.frame_ok
+        );
+        if let Some(m) = self.quality.sample_margin {
+            let _ = writeln!(s, "每比特样点数: {m:.2}（低于 4 不出帧）");
+        }
+        let _ = writeln!(s);
+        if self.frames.is_empty() {
+            let _ = writeln!(s, "（没有解出任何帧）");
+        }
+        for f in &self.frames {
+            if let Frame::Uart(u) = f {
+                let _ = writeln!(
+                    s,
+                    "#{:<3} @ {:>6} 样点  0x{:02X}  {}",
+                    u.index,
+                    u.start_sample,
+                    u.byte,
+                    if u.ok {
+                        "ok"
+                    } else {
+                        "✗ 停止位校验失败（字节不可信）"
+                    }
+                );
+            }
+        }
+        if !self.warnings.is_empty() {
+            let _ = writeln!(s);
+            let _ = writeln!(s, "告警（原文，未过滤）:");
+            for w in &self.warnings {
+                let _ = writeln!(s, "  - {}", w.text());
+            }
+        }
+        s
+    }
 }
 
 /// 解码失败。

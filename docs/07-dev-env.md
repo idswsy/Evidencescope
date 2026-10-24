@@ -101,6 +101,7 @@ cd f103-agent-scope
 | 列出可用串口 | `./host/run.sh run -p scope-cli -- ports` |
 | 连真机抓波形 | `./host/run.sh run -p scope-cli -- serial --port COM3 capture -n 2048 -o wave.csv` |
 | 对模拟器开发 | `./host/run.sh run -p scope-cli -- sim capture --scenario i2c_100k -n 4096 -o i2c.csv` |
+| UART 单通道解码 | `./host/run.sh run -p scope-cli -- sim decode --protocol uart --scenario uart_115k -n 4096` |
 | 打开桌面 GUI | `./host/run.sh run -p scope-gui -- --demo --scenario i2c_100k` |
 | 只跑某个 crate | `./host/run.sh test -p scope-mcp` |
 
