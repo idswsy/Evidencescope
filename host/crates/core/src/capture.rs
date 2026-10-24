@@ -23,11 +23,31 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Agent 可以「引用上一次采集」而不必重抓，但不会无限增长。
 pub const DEFAULT_HISTORY: usize = 16;
 
+/// 采集数据的来源。
+///
+/// 与 [`crate::analysis::Source`] 的分工：后者是**渲染时**的出处描述
+/// （带链路名，由调用方给出），本类型是**采集对象自身**携带的来源，
+/// 从 CSV 导入的采集无法再从调用方的链路参数反推，必须由数据本身记住。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureSource {
+    /// 真机抓的。
+    Device,
+    /// 模拟器生成的。
+    Simulator,
+    /// 从 CSV 文件导入的。
+    File {
+        /// 导入时的文件路径（原样保留，不展开、不规范化）。
+        path: String,
+    },
+}
+
 /// 一次采集。
 #[derive(Debug, Clone)]
 pub struct Capture {
-    /// 采集编号（设备分配）。
+    /// 采集编号（设备分配，导入的采集另占一段编号）。
     pub id: u16,
+    /// 这份数据从哪来。
+    pub source: CaptureSource,
     /// 实际采样率。**时间轴以它为准**，不是请求值。
     pub rate_hz: u32,
     /// 每个通道的原始样点（12-bit，0..4095）。
@@ -46,9 +66,13 @@ pub struct Capture {
 
 impl Capture {
     /// 创建一次空采集。
+    ///
+    /// 来源默认 [`CaptureSource::Device`]；模拟器与导入端用
+    /// [`Self::with_source`] 覆写。
     pub fn new(id: u16, rate_hz: u32, ch_count: usize, expected_samples: u32) -> Capture {
         Capture {
             id,
+            source: CaptureSource::Device,
             rate_hz,
             channels: vec![Vec::with_capacity(expected_samples as usize); ch_count],
             trigger_index: None,
@@ -60,6 +84,12 @@ impl Capture {
             overrun: false,
             expected_samples,
         }
+    }
+
+    /// 覆写数据来源（模拟器 / 导入）。
+    pub fn with_source(mut self, source: CaptureSource) -> Capture {
+        self.source = source;
+        self
     }
 
     /// 样点数（以第一个通道为准）。
@@ -201,10 +231,20 @@ impl Capture {
     /// 导出 CSV —— **全量数据的唯一出口，且只落盘不进上下文**。
     ///
     /// 时间列用绝对秒，与通用两通道 CSV 格式（`Time(s),CH1V,CH2V`）兼容。
+    ///
+    /// # 为什么第一行是 `# rate_hz=<n>`
+    ///
+    /// 时间列只有 9 位小数，**速率无法从它反推**：857142 Hz 的
+    /// `dt = 1.166666667 µs` 写成 `1.167 µs`，反推得 856898 Hz。
+    /// 于是「导出再导入，采样率不变」这条 round-trip 若靠时间列，
+    /// 不可能成立。速率是导出端自己知道的，就该写在文件里。
+    ///
+    /// `#` 开头的行是注释，读取端（`import`）忽略之，第三方工具亦然。
     pub fn to_csv(&self, scale: &[ChannelScale]) -> String {
         let mut out = String::with_capacity(self.len() * 16 * self.channels.len().max(1));
         let dt = self.dt_us() * 1e-6;
 
+        out.push_str(&format!("# rate_hz={}\n", self.rate_hz));
         out.push_str("Time(s)");
         for ch in 0..self.channels.len() {
             out.push_str(&format!(",CH{}V", ch + 1));
@@ -579,8 +619,21 @@ mod tests {
         let c = mk_capture();
         let csv = c.to_csv(&[ChannelScale::default()]);
         let lines: Vec<&str> = csv.lines().collect();
-        assert_eq!(lines[0], "Time(s),CH1V");
-        assert_eq!(lines.len(), 9); // header + 8 samples
+        assert_eq!(lines[0], "# rate_hz=1000000");
+        assert_eq!(lines[1], "Time(s),CH1V");
+        assert_eq!(lines.len(), 10); // 注释 + 表头 + 8 样点
+    }
+
+    /// 速率必须**逐位精确**写在文件里 —— 时间列只有 9 位小数，反推会差。
+    ///
+    /// 857142 Hz 的 `dt = 1.166666667 µs` 会被写成 `1.167 µs`，
+    /// 由时间列反推得 856898 Hz，与真值差 244 Hz。
+    #[test]
+    fn csv_rate_header_is_exact_for_non_representable_rates() {
+        let mut c = Capture::new(1, 857_142, 1, 2);
+        c.channels[0] = vec![0, 4095];
+        let csv = c.to_csv(&[ChannelScale::default()]);
+        assert_eq!(csv.lines().next().unwrap(), "# rate_hz=857142");
     }
 
     #[test]

@@ -56,7 +56,8 @@ pub use calib::{
     ScaleSet, CALIB_VERSION,
 };
 pub use capture::{
-    Capture, CaptureStore, ChannelScale, ChannelSummary, MinMaxPreview, DEFAULT_HISTORY,
+    Capture, CaptureSource, CaptureStore, ChannelScale, ChannelSummary, MinMaxPreview,
+    DEFAULT_HISTORY,
 };
 pub use command::{
     state_name, CommandBus, DeviceConfig, DeviceInfo, Response, RetryPolicy, TIMEOUT_CONTROL,

@@ -2486,7 +2486,11 @@ mod tests {
         assert!(v["bytes"].as_u64().unwrap() > 0, "文件应有内容");
         assert_eq!(v["format"], "csv");
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.starts_with("Time(s)"), "CSV 表头不对");
+        assert!(
+            text.starts_with("# rate_hz="),
+            "CSV 首行应是速率注释（时间列 9 位小数反推不回精确速率）"
+        );
+        assert!(text.contains("Time(s)"), "CSV 表头不对");
         let _ = std::fs::remove_file(&path);
     }
 

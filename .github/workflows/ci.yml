@@ -447,8 +447,9 @@ jobs:
           cargo run -q -p scope-cli -- sim capture --scenario sine_1k_3v3 -n 1024 -o /tmp/wave.csv
           test -s /tmp/wave.csv || { echo "::error::CSV 为空"; exit 1; }
           lines=$(wc -l < /tmp/wave.csv)
-          [ "$lines" -eq 1025 ] || { echo "::error::CSV 行数应为 1025，实际 $lines"; exit 1; }
-          head -1 /tmp/wave.csv | grep -q 'Time(s)' || { echo "::error::CSV 表头错误"; exit 1; }
+          [ "$lines" -eq 1026 ] || { echo "::error::CSV 行数应为 1026（速率注释 + 表头 + 1024 点），实际 $lines"; exit 1; }
+          head -1 /tmp/wave.csv | grep -q '^# rate_hz=857142' || { echo "::error::CSV 首行缺少精确速率"; exit 1; }
+          sed -n '2p' /tmp/wave.csv | grep -q 'Time(s)' || { echo "::error::CSV 表头错误"; exit 1; }
           echo "✓ 端到端采集产出 1024 点"
 
       - name: I2C 场景双通道
