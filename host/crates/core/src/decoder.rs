@@ -235,6 +235,18 @@ impl DecodedFrames {
             let _ = writeln!(s, "每比特样点数: {m:.2}（低于 4 不出帧）");
         }
         let _ = writeln!(s);
+        s.push_str(&self.uart_body_text());
+        s
+    }
+
+    /// UART 帧表 + 告警，不含标题 —— 证据包在「总线解码」段内嵌用它，
+    /// 避免出现两遍「UART 8N1 解码结果」。
+    pub fn uart_body_text(&self) -> String {
+        use std::fmt::Write as _;
+        let mut s = String::new();
+        if self.protocol != Protocol::Uart {
+            return s;
+        }
         if self.frames.is_empty() {
             let _ = writeln!(s, "（没有解出任何帧）");
         }

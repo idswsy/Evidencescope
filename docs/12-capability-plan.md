@@ -226,7 +226,7 @@ pub fn autodetect(cap: &Capture) -> Vec<ProtocolCandidate>; // 只给建议，�
 **关键设计决定**：
 
 1. **I2C 只做适配，不重写**。`DecodeParams::I2c` 直接转调现有 `i2c_decode::decode_capture`，`DecodedFrames` 由 `I2cDecode` 转换得到。这样 I2C 的既有测试（含 `nack` 场景）全部继续有效，插件化不引入行为变化。
-2. **插件点是 `report.rs` 的 `decode_section`**。`EvidenceInput.decode` 从 `Option<&I2cDecode>` 改为 `Option<&DecodedFrames>`；生产调用点只有 2 处（`session.rs` 组证据包处与 GUI），改动半径可控。
+2. **插件点是 `report.rs` 的 `decode_section`**。`EvidenceInput.decode` 从 `Option<&I2cDecode>` 改为 `Option<&DecodedFrames>`，并新增 `decode_req: Option<&DecodeRequest>` 回显通道/门限/波特率；生产调用点 3 处（`gui/app.rs` 与 `gui/ai.rs` 两处），改动半径可控。
 3. **UART 自动波特率只是建议**。先由最短脉宽估计位宽，再在候选波特率上校验「起始位低、停止位高」一致性，得分最高者作为建议值填进 `UartConfig`；**不自动应用**，因为自动应用一旦估错，解码结果会「看起来合理但全错」，属于红线（`docs/10` §7.4）。
 4. **每次解码必须给 `sample_margin`**：**每比特样点数** `rate_hz / baud`（不是 `rate_hz / (baud × bits_per_frame)`，后者是每帧样点数）。低于 4 时返回 `DecodeError::UnderSampled`，不出帧。`uart_115k` 在 857142 采样率下为 **7.44**，通过。
 

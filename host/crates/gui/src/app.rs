@@ -538,14 +538,26 @@ impl App {
             self.config.as_ref()
         };
 
+        // 证据包统一消费 `DecodedFrames`；GUI 内部仍保留 `I2cDecode`
+        // （画泳道要逐事件，转换一次的成本可忽略）。
+        let frames = self
+            .decode
+            .as_ref()
+            .map(|d| scope_core::to_decoded(d.clone()));
+        let decode_req = self.decode.as_ref().map(|_| scope_core::DecodeRequest {
+            protocol: scope_core::Protocol::I2c,
+            channels: vec![],
+            params: scope_core::DecodeParams::I2c(self.decode_cfg.clone()),
+        });
+
         Some(scope_core::build_evidence(&scope_core::EvidenceInput {
             capture: cap,
             scale: &self.calib_view,
             link: &link,
             simulated,
             config,
-            decode: self.decode.as_ref(),
-            decode_cfg: Some(&self.decode_cfg),
+            decode: frames.as_ref(),
+            decode_req: decode_req.as_ref(),
             question: if question.is_empty() {
                 None
             } else {

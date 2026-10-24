@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use crate::calib::ScaleSet;
 use crate::capture::Capture;
 use crate::command::DeviceConfig;
+use crate::decoder::{DecodeRequest, DecodedFrames};
 use crate::edges::{edges_hysteretic, sigma_hat};
-use crate::i2c_decode::{I2cDecode, I2cDecodeConfig};
 use crate::measure::{filter_gaps, measure, Measurements};
 use crate::signal::{detect_levels, UncertainReason};
 
@@ -205,10 +205,10 @@ pub struct EvidenceContext<'a> {
     pub simulated: bool,
     /// 设备回显配置。
     pub config: Option<&'a DeviceConfig>,
-    /// I2C 解码结果。
-    pub decode: Option<&'a I2cDecode>,
-    /// 解码配置。
-    pub decode_cfg: Option<&'a I2cDecodeConfig>,
+    /// 解码结果（任意协议）。
+    pub decode: Option<&'a DecodedFrames>,
+    /// 解码请求（用于在证据包里回显通道/门限/波特率）。
+    pub decode_req: Option<&'a DecodeRequest>,
     /// 用户额外问题。
     pub question: Option<&'a str>,
 }
@@ -554,7 +554,7 @@ mod tests {
             simulated: true,
             config: None,
             decode: None,
-            decode_cfg: None,
+            decode_req: None,
             question: None,
         };
         let text = render_text(&report, &ctx);

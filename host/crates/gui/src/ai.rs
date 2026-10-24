@@ -1326,6 +1326,12 @@ mod tests {
         let decode_cfg = scope_core::I2cDecodeConfig::default();
         let decode = scope_core::decode_capture(&cap, &decode_cfg).ok();
         let frames = decode.as_ref().map(|d| d.transactions.len()).unwrap_or(0);
+        let decoded_frames = decode.as_ref().map(|d| scope_core::to_decoded(d.clone()));
+        let decode_req = scope_core::DecodeRequest {
+            protocol: scope_core::Protocol::I2c,
+            channels: vec![],
+            params: scope_core::DecodeParams::I2c(decode_cfg.clone()),
+        };
 
         let evidence = scope_core::build_evidence(&EvidenceInput {
             capture: &cap,
@@ -1333,8 +1339,8 @@ mod tests {
             link: "sim(i2c_100k)",
             simulated: true,
             config: bus.config.as_ref(),
-            decode: decode.as_ref(),
-            decode_cfg: Some(&decode_cfg),
+            decode: decoded_frames.as_ref(),
+            decode_req: Some(&decode_req),
             question: Some("这条总线上的通信是否正常？有没有值得注意的地方？"),
         });
 
@@ -1418,14 +1424,20 @@ mod tests {
         let scale = scope_core::ScaleSet::uncalibrated(cap.channels.len());
         let decode_cfg = scope_core::I2cDecodeConfig::default();
         let decode = scope_core::decode_capture(&cap, &decode_cfg).ok();
+        let decoded_frames = decode.as_ref().map(|d| scope_core::to_decoded(d.clone()));
+        let decode_req = scope_core::DecodeRequest {
+            protocol: scope_core::Protocol::I2c,
+            channels: vec![],
+            params: scope_core::DecodeParams::I2c(decode_cfg.clone()),
+        };
         let evidence = scope_core::build_evidence(&EvidenceInput {
             capture: &cap,
             scale: &scale,
             link: "sim(i2c_100k)",
             simulated: true,
             config: bus.config.as_ref(),
-            decode: decode.as_ref(),
-            decode_cfg: Some(&decode_cfg),
+            decode: decoded_frames.as_ref(),
+            decode_req: Some(&decode_req),
             question: Some("这条总线上的通信是否正常？有没有值得注意的地方？"),
         });
         println!(

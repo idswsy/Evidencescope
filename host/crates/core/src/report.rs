@@ -36,7 +36,8 @@ use crate::analysis::EvidenceContext;
 use crate::calib::ScaleSet;
 use crate::capture::Capture;
 use crate::command::DeviceConfig;
-use crate::i2c_decode::{I2cDecode, I2cDecodeConfig, Transaction};
+use crate::decoder::{DecodeParams, DecodeRequest, DecodeWarning, DecodedFrames, Frame, Protocol};
+use crate::i2c_decode::{I2cWarning, Transaction};
 
 /// 波形包络的**目标**桶数。
 ///
@@ -78,10 +79,10 @@ pub struct EvidenceInput<'a> {
     pub simulated: bool,
     /// 设备回显的配置。没连上时为 `None`。
     pub config: Option<&'a DeviceConfig>,
-    /// I2C 解码结果。没解或通道数不够时为 `None`。
-    pub decode: Option<&'a I2cDecode>,
-    /// 解码用的配置（不是用户手选通道时用来标注）。
-    pub decode_cfg: Option<&'a I2cDecodeConfig>,
+    /// 解码结果（任意协议）。没解或通道数不够时为 `None`。
+    pub decode: Option<&'a DecodedFrames>,
+    /// 解码请求（回显通道/门限/波特率用）。
+    pub decode_req: Option<&'a DecodeRequest>,
     /// 用户额外想问的问题。为空则只给证据。
     pub question: Option<&'a str>,
 }
@@ -103,7 +104,7 @@ pub fn build_evidence(input: &EvidenceInput<'_>) -> String {
         simulated: input.simulated,
         config: input.config,
         decode: input.decode,
-        decode_cfg: input.decode_cfg,
+        decode_req: input.decode_req,
         question: input.question,
     };
     crate::analysis::render_text(&report, &ctx)
@@ -477,9 +478,21 @@ fn decode_section(s: &mut String, input: &EvidenceContext<'_>) {
         return;
     };
 
+    match d.protocol {
+        Protocol::I2c => decode_i2c_section(s, d, input.decode_req),
+        Protocol::Uart => decode_uart_section(s, d, input.decode_req),
+    }
+}
+
+/// I²C 解码段 —— 保持既有措辞逐字节不变（B3 回归的一部分）。
+fn decode_i2c_section(s: &mut String, d: &DecodedFrames, req: Option<&DecodeRequest>) {
     let _ = writeln!(s, "场景: I2C 总线解码");
 
-    if let Some(cfg) = input.decode_cfg {
+    if let Some(DecodeRequest {
+        params: DecodeParams::I2c(cfg),
+        ..
+    }) = req
+    {
         // 说明通道是**用户选的**，不是自动检测的 —— 这一点影响模型对结论的信任度
         let _ = writeln!(
             s,
@@ -494,15 +507,28 @@ fn decode_section(s: &mut String, input: &EvidenceContext<'_>) {
         );
     }
 
+    let transactions: Vec<&Transaction> = d
+        .frames
+        .iter()
+        .filter_map(|f| match f {
+            Frame::I2c(t) => Some(t),
+            Frame::Uart(_) => None,
+        })
+        .collect();
+
     let _ = writeln!(
         s,
         "帧数: {}   解码可信: {}",
-        d.transactions.len(),
-        if d.is_untrustworthy() { "否" } else { "是" }
+        transactions.len(),
+        if i2c_untrustworthy(&d.warnings) {
+            "否"
+        } else {
+            "是"
+        }
     );
 
-    let truncated = count_truncated(d);
-    if d.transactions.is_empty() {
+    let truncated = transactions.iter().filter(|t| !t.complete).count();
+    if transactions.is_empty() {
         let _ = writeln!(s, "（一帧都没解出来）");
     } else {
         let _ = writeln!(s, "帧表（每个地址 / 数据字节后的标记）:");
@@ -511,7 +537,7 @@ fn decode_section(s: &mut String, input: &EvidenceContext<'_>) {
             "  +A = 从机应答    +N = 从机未应答（可能是故障）    \
              +E = 读事务末字节的主机收尾 NACK（正常）"
         );
-        for (i, t) in d.transactions.iter().take(MAX_FRAMES).enumerate() {
+        for (i, t) in transactions.iter().take(MAX_FRAMES).enumerate() {
             let payload = frame_payload(t);
             let _ = writeln!(
                 s,
@@ -523,7 +549,7 @@ fn decode_section(s: &mut String, input: &EvidenceContext<'_>) {
                 if t.complete { "" } else { "⚠被窗口截断" },
             );
         }
-        let extra = d.transactions.len().saturating_sub(MAX_FRAMES);
+        let extra = transactions.len().saturating_sub(MAX_FRAMES);
         if extra > 0 {
             // 不静默截断：说清楚还剩多少没列
             let _ = writeln!(s, "  …… 另有 {extra} 帧未列出（超出 {MAX_FRAMES} 帧上限）");
@@ -547,6 +573,67 @@ fn decode_section(s: &mut String, input: &EvidenceContext<'_>) {
             let _ = writeln!(s, "  - {}", w.text());
         }
     }
+}
+
+/// UART 解码段 —— 与 I²C 共用「总线解码」段名，协议名写进场景行。
+fn decode_uart_section(s: &mut String, d: &DecodedFrames, req: Option<&DecodeRequest>) {
+    let _ = writeln!(s, "场景: UART 8N1 串行解码");
+
+    if let Some(DecodeRequest {
+        params: DecodeParams::Uart(cfg),
+        channels,
+        ..
+    }) = req
+    {
+        let ch = channels.first().copied().unwrap_or(0);
+        let margin = d.quality.sample_margin.unwrap_or(0.0);
+        let _ = writeln!(
+            s,
+            "通道: {}   波特率: {}   每比特样点: {:.2}（低于 4 不出帧）",
+            channel_label(ch),
+            cfg.baud,
+            margin
+        );
+    }
+
+    let _ = writeln!(
+        s,
+        "帧数: {}   解码可信: {}",
+        d.frame_count(),
+        if d.quality.frame_errors == 0 {
+            "是"
+        } else {
+            "否"
+        }
+    );
+
+    let bytes = d.uart_bytes().unwrap_or_default();
+    if !bytes.is_empty() {
+        let take = bytes.len().min(16);
+        let hex: Vec<String> = bytes[..take].iter().map(|b| format!("{b:02X}")).collect();
+        let more = if bytes.len() > take {
+            format!(" ……（共 {} 字节）", bytes.len())
+        } else {
+            String::new()
+        };
+        let _ = writeln!(s, "字节序列: {}{more}", hex.join(" "));
+    }
+
+    s.push_str(&d.uart_body_text());
+}
+
+/// I²C 告警里哪些属于「结果不可信」级别。
+fn i2c_untrustworthy(warnings: &[DecodeWarning]) -> bool {
+    warnings.iter().any(|w| {
+        matches!(
+            w,
+            DecodeWarning::I2c(
+                I2cWarning::NoSignal
+                    | I2cWarning::LevelsInvalid { .. }
+                    | I2cWarning::SclStuck { .. }
+            )
+        )
+    })
 }
 
 /// 结尾：把「你该怎么用这些数字」说死，防止模型自由发挥。
@@ -661,13 +748,6 @@ fn frame_payload(t: &Transaction) -> String {
         }
     }
     s.trim_end().to_string()
-}
-
-/// 数一数有多少帧没正常收尾。
-fn count_truncated(d: &I2cDecode) -> usize {
-    // `complete: false` 才是真正的「被窗口切断」。注意这里**不**用告警条数代替 ——
-    // `warnings` 里那些是别的种类，两者不是一回事。
-    d.transactions.iter().filter(|t| !t.complete).count()
 }
 
 fn join_u16(v: &[u16]) -> String {
@@ -919,8 +999,17 @@ mod tests {
             simulated: true,
             config: None,
             decode: None,
-            decode_cfg: None,
+            decode_req: None,
             question: None,
+        }
+    }
+
+    /// 测试用：把既有 `I2cDecode` + 配置组装成新的统一出口类型。
+    fn req_i2c(cfg: &I2cDecodeConfig) -> crate::decoder::DecodeRequest {
+        crate::decoder::DecodeRequest {
+            protocol: crate::decoder::Protocol::I2c,
+            channels: vec![],
+            params: crate::decoder::DecodeParams::I2c(cfg.clone()),
         }
     }
 
@@ -953,9 +1042,11 @@ mod tests {
         );
 
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
         let cfg = I2cDecodeConfig::default();
-        i.decode_cfg = Some(&cfg);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         assert!(
@@ -991,9 +1082,11 @@ mod tests {
         );
 
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
         let cfg = I2cDecodeConfig::default();
-        i.decode_cfg = Some(&cfg);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         assert!(
@@ -1093,8 +1186,10 @@ mod tests {
         let d = decode_capture(&cap, &I2cDecodeConfig::default()).unwrap();
         let cfg = I2cDecodeConfig::default();
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
-        i.decode_cfg = Some(&cfg);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         assert!(text.contains("从机应答"), "缺图例：{text}");
@@ -1156,8 +1251,10 @@ mod tests {
         let d = decode_capture(&cap, &I2cDecodeConfig::default()).unwrap();
         let cfg = I2cDecodeConfig::new(1, 0); // 故意反接，验证打印的是配置值
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
-        i.decode_cfg = Some(&cfg);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         assert!(text.contains("SCL=CH2"), "应打印配置里的通道：{text}");
@@ -1183,8 +1280,10 @@ mod tests {
         let d = decode_capture(&cap, &I2cDecodeConfig::default()).unwrap();
         let cfg = I2cDecodeConfig::default();
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
-        i.decode_cfg = Some(&cfg);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         assert!(text.contains("CH1"), "两通道采集应出现 CH1：{text}");
@@ -1290,8 +1389,10 @@ mod tests {
         let d = decode_capture(&cap, &I2cDecodeConfig::default()).ok();
         let cfg = I2cDecodeConfig::default();
         let mut i = input(&cap, &scale);
-        i.decode = d.as_ref();
-        i.decode_cfg = Some(&cfg);
+        let frames = d.as_ref().map(|x| crate::to_decoded(x.clone()));
+        i.decode = frames.as_ref();
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         let chars = text.chars().count();
@@ -1314,8 +1415,10 @@ mod tests {
         let d = decode_capture(&cap, &I2cDecodeConfig::default()).unwrap();
         let cfg = I2cDecodeConfig::default();
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
-        i.decode_cfg = Some(&cfg);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         assert!(
@@ -1380,8 +1483,10 @@ mod tests {
         let d = decode_capture(&cap, &I2cDecodeConfig::default()).unwrap();
         let cfg = I2cDecodeConfig::default();
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
-        i.decode_cfg = Some(&cfg);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
         let text = build_evidence(&i);
 
         let marker = "== 波形形状";
@@ -1518,8 +1623,10 @@ mod tests {
 
         let render = || {
             let mut i = input(&cap, &scale);
-            i.decode = Some(&d);
-            i.decode_cfg = Some(&cfg);
+            let frames = crate::to_decoded(d.clone());
+            i.decode = Some(&frames);
+            let req = req_i2c(&cfg);
+            i.decode_req = Some(&req);
             build_evidence(&i)
         };
         assert_eq!(render(), render(), "同样的输入渲染出了不同的文本");
@@ -1595,17 +1702,82 @@ mod tests {
         let d = decode_capture(&cap, &I2cDecodeConfig::default()).expect("应能解码");
         let cfg = I2cDecodeConfig::default();
         let mut i = input(&cap, &scale);
-        i.decode = Some(&d);
-        i.decode_cfg = Some(&cfg);
+        let frames = crate::to_decoded(d.clone());
+        i.decode = Some(&frames);
+        let req = req_i2c(&cfg);
+        i.decode_req = Some(&req);
 
         let text = build_evidence(&i);
         assert!(
             text.contains("场景: I2C 总线解码"),
             "有解码时要声明 I2C 场景\n{text}"
         );
+    }
+
+    /// B6：证据包的解码段对 UART 也成立，且协议名出现在段标题/场景行。
+    #[test]
+    fn decode_declares_the_uart_scenario_and_bytes() {
+        // 与模拟器 uart_115k 同构：10 位帧 + 2 位空闲、LSB 先发。
+        let rate = 857_142u32;
+        let baud = 115_200u64;
+        let bytes = [0x55u8, 0x0F, 0xA5];
+        let n = 4096usize;
+        let frame_bits = 12usize;
+        let s: Vec<u16> = (0..n)
+            .map(|i| {
+                let bit = i as u64 * baud / rate as u64;
+                let pos = (bit % (bytes.len() * frame_bits) as u64) as usize;
+                let frame = pos / frame_bits;
+                let within = pos % frame_bits;
+                let level = if within >= 10 {
+                    true
+                } else if within == 0 {
+                    false
+                } else if within == 9 {
+                    true
+                } else {
+                    (bytes[frame] >> (within - 1)) & 1 == 1
+                };
+                if level {
+                    4000
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let mut cap = Capture::new(1, rate, 1, n as u32);
+        cap.channels[0] = s;
+
+        let scale = ScaleSet::uncalibrated(1);
+        let req = crate::decoder::DecodeRequest {
+            protocol: crate::decoder::Protocol::Uart,
+            channels: vec![0],
+            params: crate::decoder::DecodeParams::Uart(crate::decoder::UartConfig::default()),
+        };
+        let frames = crate::decoder::decode(&cap, &req).expect("UART 应能解码");
+
+        let mut i = input(&cap, &scale);
+        i.link = "sim(uart_115k)";
+        i.decode = Some(&frames);
+        i.decode_req = Some(&req);
+        let text = build_evidence(&i);
+
         assert!(
-            !text.contains("模拟信号（无总线解码）"),
-            "有解码就不该说「无总线解码」\n{text}"
+            text.contains("场景: UART 8N1 串行解码"),
+            "证据包必须声明 UART 场景\n{text}"
+        );
+        assert!(
+            text.contains("波特率: 115200"),
+            "证据包必须回显波特率\n{text}"
+        );
+        assert!(
+            text.contains("字节序列: 55 0F A5"),
+            "证据包必须给出字节序列\n{text}"
+        );
+        assert!(text.contains("帧数: 46"), "4096 点应解出 46 帧\n{text}");
+        assert!(
+            !text.contains("场景: I2C 总线解码"),
+            "UART 结果不能声明成 I2C 场景\n{text}"
         );
     }
 }
