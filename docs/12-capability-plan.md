@@ -115,7 +115,7 @@ pub enum RefuseReason {
 2. **`Measurements` 不改**。它是内部计算类型，字段与 `None` 语义（测不出，不是 0）全部保留；`AnalysisReport` 是对外类型。改动隔离在一层转换函数里。
 3. **不新增「结论文本」层**。文本渲染器只有一处：`analysis::render_text(&AnalysisReport, &EvidenceContext) -> String`。`build_evidence(&EvidenceInput)` **签名不变**，内部改为先组装 `AnalysisReport` 与 `EvidenceContext`（链路、模拟器标记、设备配置、用户问题），再调用 `render_text`。这样 `report.rs` 既有测试、`gui/app.rs` 与 `gui/ai.rs` 的调用点全部零改动。
 4. **`RefuseReason` 不改 `UncertainReason`**。前者是新枚举（11 变体），后者（7 变体）继续服务形状判定；写一个 `From<UncertainReason>` 转换。这样既有 7 处用法与测试不受影响。
-5. **文本出口必须带判决**。每个通道的测量行后追加一行「可信度」，按 `Ok / Bounded / Refused` 分组；`RefuseReason::text()` 是中文措辞的唯一来源。否则模型看到 `频率=207046 Hz` 时无从知道它其实是 `Refused` —— 这正是「同一份结论给人和给模型」不能只在 JSON 出口成立的原因。5 个黄金文本 fixture 钉住这一行。
+5. **文本出口必须带判决**。每个通道的测量行后追加一行「可信度」，按 `Ok / Bounded / Refused` 分组；`RefuseReason::text()` 是中文措辞的唯一来源。否则模型看到 `频率=207046 Hz` 时无从知道它其实是 `Refused` —— 这正是「同一份结论给人和给模型」不能只在 JSON 出口成立的原因。6 个黄金文本 fixture 钉住这一行。
 
 ### 2.3 serde 形状（对外契约）
 
@@ -156,7 +156,7 @@ pub enum RefuseReason {
 | A2 | `report.rs` 不再直接取 `Measurements` 字段（唯一取字段处是 `analysis::render_text`） | `grep -nE "\bm\.(vpp|min|max|mean|rms|ac_rms|freq_hz|duty_pct|rise_ns|fall_ns|overshoot_pct|undershoot_pct|high_ns|edges)\b" host/crates/core/src/report.rs` 应为 0 行；另加 6 个代表场景的证据包黄金文本逐字节比对 —— `host/crates/sim/tests/evidence_golden.rs` + `tests/fixtures/evidence/`（sine / step_ring / noise / i2c / uart / clock_62k） |
 | A3 | MCP 与证据包对同一采集给出一致的标量 | 新增测试：同一 `Capture` 走两个出口，逐字段比较 —— `host/crates/mcp/src/session.rs` 的 `mcp_measure_and_evidence_text_agree_on_every_scalar`（6 个场景，覆盖 `Some` / `None` 两种数值） |
 | A4 | 无不确定度时**不得**输出 `ok` 判决 | `Quality::empty()` 下：无模型的量为 `Refused(NoUncertaintyModel)`；未标定的电压量为 `Refused(CalibrationMissing)`；占空比为 `Refused(ModelUnverified)`；**已标定只换电压口径，不改变「无模型就拒答」**（测试 `calibrated_voltages_still_refuse_without_a_model`） |
-| A5 | 主机侧测试数不下降 | `host/run.sh test`，起点 386 passed / 5 ignored；G1 落地后 399 passed / 5 ignored；**2026-10-24 实测 438 passed / 5 ignored**（含 GUI 84 + 5 ignored） |
+| A5 | 主机侧测试数不下降 | `host/run.sh test`，起点 386 passed / 5 ignored；G1 落地后 399 passed / 5 ignored；G3 落地后 463 passed / 5 ignored；**2026-10-24 F2–F4 后实测 466 passed / 5 ignored**（含 GUI 84 + 5 ignored） |
 
 ### 2.5 风险
 

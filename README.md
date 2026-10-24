@@ -170,7 +170,7 @@ F103/
 # 3c. UART 8N1 单通道解码（真机 1 通道可用的那条路径）
 ./host/run.sh run -p scope-cli -- sim decode --protocol uart --scenario uart_115k -n 4096
 
-# 3b. 非 I2C 波形（共 15 个场景）：PWM 占空比 / 阶跃响应（过冲+振铃）/ RC / UART
+# 3b. 非 I2C 波形（共 18 个场景）：PWM 占空比 / 阶跃响应（过冲+振铃）/ RC / UART / 抖动时钟
 ./host/run.sh run -p scope-cli -- measure --scenario pwm_1k_25
 ./host/run.sh run -p scope-cli -- measure --scenario step_ring
 
@@ -183,7 +183,7 @@ seq 去重缓存，以及 6 个故障注入字段（丢帧 / CRC 错 / 延迟尖
 永不触发 / 强制溢出）。CLI、GUI、MCP 切至 `sim` 后 Agent 逻辑无需改动。
 模拟器不按波特率节流；链路的实际速率只影响命令层的超时估算。
 
-**模拟器场景（15 个）**
+**模拟器场景（18 个）**
 
 `--scenario <名称>` 的取值。场景名同时是 CLI 参数、MCP schema 的 `sim_scenario`
 枚举、GUI 下拉项与证据包里的链路描述 —— 同一份清单，三处不手抄。
@@ -205,6 +205,9 @@ seq 去重缓存，以及 6 个故障注入字段（丢帧 / CRC 错 / 延迟尖
 | `step_ring` | 500 Hz 设定方波经二阶欠阻尼系统 | **PID / 控制系统**：过冲 ≈31%、12 kHz 衰减振铃 |
 | `rc_charge` | 一阶 RC，τ = 150 µs | 指数曲线；同时验证「不是方波就别硬叫方波」 |
 | `uart_115k` | 115200 baud，三字节循环 + 空闲位 | 数字时序但非 I2C；帧边界在波形上可见 |
+| `slow_edge_noisy` | 1 kHz 双电平，10–90% 各 200 µs，叠加白噪声 | 迟滞缺陷回归；频率必须回到 1000 Hz |
+| `ring_alias` | 振铃半周期不足 2 样点的阶跃响应 | 混叠必须 `Refused(Aliased)`，不出频率数字 |
+| `clock_62k` | 62.5 kHz 时钟，10–90% 3 样点，固定抖动 | 自然场景里唯一能给出**数值 TIE**（σ≈446 ns） |
 
 > `step_ring` 的过冲是 `exp(-πζ/√(1-ζ²))` 在 ζ = 0.35 下的值 —— 场景文档、
 > 实现与测试断言引用的是同一个解析式，不是互相抄。

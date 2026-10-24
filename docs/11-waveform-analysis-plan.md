@@ -770,7 +770,7 @@ MCP 侧 `mcp/src/params.rs:146-172` 的 schema 由 `Scenario::parse` 生成，**
 ### 10.1 G3 落地记录（2026-10-24）
 
 **范围**：P1 瞬态特征（`core/src/transient.rs`）、P3 TIE（`core/src/tie.rs`）、出口贯通
-（`AnalysisReport` → 证据包文本 / MCP `scope_measure` → 5 份黄金文本）。
+（`AnalysisReport` → 证据包文本 / MCP `scope_measure` → 5 份黄金文本；F3 后为 6 份）。
 
 **与原计划的偏差**：
 
@@ -806,7 +806,7 @@ MCP 侧 `mcp/src/params.rs:146-172` 的 schema 由 `Scenario::parse` 生成，**
 **验收实测**：
 
 - `cargo test --workspace`：463 passed / 5 ignored（基线 438 / 5）；
-- A2 5 份黄金文本逐字节更新并通过；A3 跨出口逐字段比对通过（新增 1 条合成慢时钟用例）；
+- A2 5 份黄金文本逐字节更新并通过（F3 后为 6 份）；A3 跨出口逐字段比对通过（新增 1 条合成慢时钟用例）；
   A4「无模型不得 Ok」通过；
 - 4096 点双通道证据包仍 < `MAX_CHARS / 2`；`MAX_CHARS = 8000` 未动；
 - `scope-mcp --selftest` 7/7；clippy `-D warnings` 与 `fmt --check` 干净。
