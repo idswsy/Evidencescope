@@ -2555,6 +2555,207 @@ mod tests {
         );
     }
 
+    /// A3：同一 `Capture` 走 MCP JSON 与证据包文本两个出口，逐字段比对标量。
+    ///
+    /// 判据不是「两边都含这个数」，而是：
+    /// - 每个**标量**在文本里按显示精度出现，且与 MCP 的 `f64` 四舍五入一致；
+    /// - `None` 两边都必须是「测不出」，不能一边 `null`、一边印个 0；
+    /// - 每个量的**判决**都在文本的可信度行里落到同一类别（Ok/Bounded/Refused）。
+    ///
+    /// MCP 的 `metrics` 过滤、文本的省略逻辑都不参与本测试 —— 两边都取默认
+    /// 全量，否则比较的是「请求了什么」而不是「同一份结论」。
+    #[test]
+    fn mcp_measure_and_evidence_text_agree_on_every_scalar() {
+        // 五个场景覆盖 Some / None 的所有组合：i2c 全有、sine 频率/占空比无、
+        // noise 下降沿与过冲无、step_ring 上升沿 / 频率无、uart 单通道。
+        for scenario in ["i2c_100k", "sine_1k_3v3", "step_ring", "noise", "uart_115k"] {
+            let mut s = Session::new();
+            s.connect(&args(
+                json!({ "transport": "sim", "sim_scenario": scenario }),
+            ))
+            .unwrap();
+            let _ = s.capture(&args(json!({}))).unwrap();
+            let cap = s.store.get(1).expect("刚采的在 store 里").clone();
+            let scales = s.calib_view.clone();
+            let config = s.bus.as_ref().and_then(|b| b.config.clone());
+            let link = s.bus.as_ref().map(|b| b.describe()).unwrap_or_default();
+            let simulated = s.bus.as_ref().map(|b| b.is_simulated()).unwrap_or(false);
+            let text = scope_core::build_evidence(&scope_core::EvidenceInput {
+                capture: &cap,
+                scale: &scales,
+                link: &link,
+                simulated,
+                config: config.as_ref(),
+                decode: None,
+                decode_req: None,
+                question: None,
+            });
+
+            // 文本里格式化一个可选标量：Some → 数字+单位，None → 该量的「测不出」原文。
+            fn shown(v: Option<f64>, precision: usize, unit: &str, none: &str) -> String {
+                match v {
+                    Some(x) => format!("{x:.precision$} {unit}", precision = precision),
+                    None => none.to_string(),
+                }
+            }
+
+            // 截出一个通道的文本块（从 `CHn:` 到下一个 `CH` 行）。
+            fn channel_block(section: &str, ch: usize) -> &str {
+                let marker = format!("CH{}:", ch + 1);
+                let start = section
+                    .find(&marker)
+                    .unwrap_or_else(|| panic!("证据包缺 {marker}"));
+                let rest = &section[start..];
+                let end = rest[1..].find("\nCH").map(|i| i + 1).unwrap_or(rest.len());
+                &rest[..end]
+            }
+
+            // 可信度行按「组头: 成员」拆开，成员之间用 `/` 或 `、` 分隔。
+            fn group_has(groups: &[(&str, &str)], header: &str, needle: &str) -> bool {
+                groups.iter().any(|(h, members)| {
+                    *h == header && members.split(['/', '、']).any(|item| item.trim() == needle)
+                })
+            }
+
+            let v = s.measure(&args(json!({ "capture_id": 1 }))).unwrap();
+            let section = text
+                .split("== 通道测量")
+                .nth(1)
+                .expect("证据包应有通道测量段");
+
+            for ch in 0..cap.channels.len() {
+                let block = channel_block(section, ch);
+                let ch_key = format!("ch{ch}");
+                let m = v["measurements"]
+                    .get(ch_key.as_str())
+                    .unwrap_or_else(|| panic!("MCP 结果缺 {ch_key}"));
+
+                // 电压：文本固定 4 位小数。
+                for (key, label) in [
+                    ("vpp_v", "Vpp"),
+                    ("min_v", "min"),
+                    ("max_v", "max"),
+                    ("mean_v", "mean"),
+                    ("rms_v", "RMS"),
+                    ("ac_rms_v", "AC-RMS"),
+                ] {
+                    let value = m[key]
+                        .as_f64()
+                        .unwrap_or_else(|| panic!("{key} 不该是 null"));
+                    assert!(
+                        block.contains(&format!("{label}={value:.4} V")),
+                        "ch{ch} {label}：MCP={value}，文本块：\n{block}"
+                    );
+                }
+
+                // 频率 / 占空比：None 与「测不出」必须成对出现。
+                assert!(
+                    block.contains(&format!(
+                        "频率={}",
+                        shown(m["freq_hz"].as_f64(), 1, "Hz", "测不出（无明显周期）")
+                    )),
+                    "ch{ch} 频率不一致：\n{block}"
+                );
+                assert!(
+                    block.contains(&format!(
+                        "占空比={}",
+                        shown(m["duty_pct"].as_f64(), 1, "%", "测不出")
+                    )),
+                    "ch{ch} 占空比不一致：\n{block}"
+                );
+
+                // 边沿时间与过冲在文本里是成对字段，必须两边同时为 None/Some。
+                let rise = shown(m["rise_ns"].as_f64(), 1, "ns", "测不出（没有干净的边沿）");
+                let fall = shown(m["fall_ns"].as_f64(), 1, "ns", "测不出（没有干净的边沿）");
+                assert!(
+                    block.contains(&format!("上升/下降={rise}/{fall}")),
+                    "ch{ch} 上升/下降不一致：\n{block}"
+                );
+
+                let over = shown(
+                    m["overshoot_pct"].as_f64(),
+                    1,
+                    "%",
+                    "测不出（无双电平参考）",
+                );
+                let under = shown(
+                    m["undershoot_pct"].as_f64(),
+                    1,
+                    "%",
+                    "测不出（无双电平参考）",
+                );
+                assert!(
+                    block.contains(&format!("过冲/下冲={over}/{under}")),
+                    "ch{ch} 过冲/下冲不一致：\n{block}"
+                );
+
+                assert!(
+                    block.contains(&format!(
+                        "高电平脉宽={}",
+                        shown(m["high_ns"].as_f64(), 1, "ns", "测不出（没有高电平段）")
+                    )),
+                    "ch{ch} 高电平脉宽不一致：\n{block}"
+                );
+                assert!(
+                    block.contains(&format!("跃变数={}", m["edges"].as_u64().unwrap())),
+                    "ch{ch} 跃变数不一致：\n{block}"
+                );
+
+                // 判决：每个键都必须出现在可信度行的同一类别里。
+                let verdicts = m["quality"]["verdicts"]
+                    .as_object()
+                    .expect("quality.verdicts 应是对象");
+                let vline = block
+                    .lines()
+                    .find(|l| l.trim_start().starts_with("可信度:"))
+                    .unwrap_or_else(|| panic!("ch{ch} 缺可信度行：\n{block}"));
+                let payload = vline
+                    .trim_start()
+                    .strip_prefix("可信度: ")
+                    .expect("可信度行格式");
+                let groups: Vec<(&str, &str)> = payload
+                    .split('；')
+                    .filter_map(|seg| seg.split_once(": "))
+                    .collect();
+
+                for (key, raw) in verdicts {
+                    let verdict: scope_core::Verdict =
+                        serde_json::from_value(raw.clone()).expect("判决形状应可反序列化");
+                    let (label, unit) = scope_core::quantity_label(key)
+                        .unwrap_or_else(|| panic!("{key} 没有中文显示名"));
+                    match verdict {
+                        scope_core::Verdict::Ok { u } => {
+                            // `u == 0.0` 写成 if 而不是 match guard：clippy 的
+                            // redundant-guards 会把它改写成浮点字面量模式，
+                            // 而浮点模式在 Rust 里是雷区。
+                            if u == 0.0 {
+                                assert!(
+                                    group_has(&groups, "可信（精确）", label),
+                                    "ch{ch} {label} 应落在「可信（精确）」：{vline}"
+                                );
+                            } else {
+                                assert!(
+                                    group_has(&groups, "可信", &format!("{label}±{u:.3} {unit}")),
+                                    "ch{ch} {label} 的不确定度没进文本：{vline}"
+                                );
+                            }
+                        }
+                        scope_core::Verdict::Bounded { lower } => assert!(
+                            group_has(&groups, "下界", &format!("{label}≥{lower:.1} {unit}")),
+                            "ch{ch} {label} 的下界没进文本：{vline}"
+                        ),
+                        scope_core::Verdict::Refused { reason } => {
+                            assert!(
+                                group_has(&groups, &format!("拒答（{}）", reason.text()), label),
+                                "ch{ch} {label} 的拒答原因没进文本：{vline}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn watch_refuses_to_run_without_a_connection() {
         // 回归：初版把一切错误计进 gaps，于是「还没连设备」伪装成

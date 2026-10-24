@@ -443,6 +443,17 @@ const VERDICT_KEYS: [(&str, &str, &str); 14] = [
     ("edges", "跃变数", "次"),
 ];
 
+/// 证据包里某个量的显示名与单位。
+///
+/// `None` 表示这是一个还没进 [`VERDICT_KEYS`] 的新量 —— 证据包会退回用
+/// 原始键名，**跨出口测试**则应当报错提醒补名字。
+pub fn quantity_label(key: &str) -> Option<(&'static str, &'static str)> {
+    VERDICT_KEYS
+        .iter()
+        .find(|(k, _, _)| *k == key)
+        .map(|(_, label, unit)| (*label, *unit))
+}
+
 /// 一个通道的可信度行。
 ///
 /// 证据包从前只印数值，不印判决 —— 模型看到 `频率=207046 Hz` 时没有任何
@@ -538,8 +549,8 @@ pub(crate) fn channels_text(s: &mut String, report: &AnalysisReport, cap: &Captu
         any = true;
         let _ = writeln!(
             s,
-            "{name}: Vpp={:.4} V  min={:.4} V  max={:.4} V  mean={:.4} V  AC-RMS={:.4} V",
-            m.vpp, m.min, m.max, m.mean, m.ac_rms
+            "{name}: Vpp={:.4} V  min={:.4} V  max={:.4} V  mean={:.4} V  RMS={:.4} V  AC-RMS={:.4} V",
+            m.vpp, m.min, m.max, m.mean, m.rms, m.ac_rms
         );
         let freq = match m.freq_hz {
             Some(f) => format!("{f:.1} Hz"),

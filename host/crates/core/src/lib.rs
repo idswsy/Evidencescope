@@ -49,8 +49,8 @@ pub mod signal;
 
 pub use acquire::{acquire, acquire_cancellable, AcquireParams, TriggerEvent};
 pub use analysis::{
-    AnalysisReport, CalibrationState, ChannelAnalysis, EvidenceContext, Provenance, Quality,
-    RefuseReason, Source, Verdict, ANALYSIS_SCHEMA,
+    quantity_label, AnalysisReport, CalibrationState, ChannelAnalysis, EvidenceContext, Provenance,
+    Quality, RefuseReason, Source, Verdict, ANALYSIS_SCHEMA,
 };
 pub use calib::{
     decode_uid, encode_uid, is_placeholder_uid, CalibrationFile, CalibrationStore, DeviceCalib,
