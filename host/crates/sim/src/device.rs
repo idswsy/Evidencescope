@@ -864,7 +864,7 @@ impl SimDevice {
 
         // **按通道配置改变输出** —— 从前 `ch0_enable` / `offset_lsb` 只是被存下来
         // 并在 `GET_CONFIG` 里回显，**没有任何代码用它**：禁用一个通道，
-        // 采集数据一字不变。那等于设备在撒谎。
+        // 采集数据一字不变。这会使回显配置与实际采集行为不一致。
         for (ch, samples) in channels.iter_mut().enumerate() {
             let (enable, offset) = match ch {
                 0 => (self.cfg.ch0_enable != 0, i32::from(self.cfg.ch0_offset_lsb)),

@@ -19,7 +19,7 @@
 //!   │  Low  │         Unknown         │  High  │
 //! ```
 //!
-//! 落在判决带内的样点**不猜**，计入 [`SignalQuality::unknown_scl`] /
+//! 落在判决带内的样点**不做分类判定**，计入 [`SignalQuality::unknown_scl`] /
 //! [`SignalQuality::unknown_sda`] 并产生 [`I2cWarning::DecisionBandSamples`]。
 //! 这条纪律的来源是项目定位 —— **无法给出可信结论时必须显式拒答，不得输出看似精确的无依据数值**。
 //!
@@ -76,7 +76,7 @@ pub enum Level {
     Low,
     /// 高于或等于 `VIH`。
     High,
-    /// 落在判决带内 —— **不猜**，记录并报警。
+    /// 落在判决带内 —— **不做分类判定**，记录并报警。
     Unknown,
 }
 

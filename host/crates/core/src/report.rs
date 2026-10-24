@@ -280,7 +280,7 @@ fn kind_line(c: &crate::signal::Classification) -> String {
     let levels = &ev.levels;
 
     // 双电平判定的公共依据（只在判定成立时印 —— 判不出路径上的
-    // occupancy 是占位值，印出去就是编造的数字）
+    // occupancy 是占位值，印出去即成为无依据数值）
     let two_level = |extra: &str| {
         format!(
             "双电平占用率={:.2}(≥0.70)  Vlo={:.0}/Vhi={:.0} LSB{}",

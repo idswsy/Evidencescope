@@ -261,7 +261,7 @@ impl App {
             return;
         }
 
-        // 快照 —— 会话期间与收回来之后都要靠它说真话
+        // 快照 —— 会话期间与收回来之后都以它为唯一数据来源
         self.drive.handoff = Some(Handoff {
             link: self.link_description(),
             simulated: self.simulated,

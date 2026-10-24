@@ -303,7 +303,7 @@ Time(s),CH1V,CH2V
 | 规则 | 处置 |
 |---|---|
 | 首列必须是 `Time(s)` 或 `Time` | 否则 `NoDataColumns` |
-| **速率来源优先级** | `# rate_hz=<n>` 注释 > `--rate-hz` > 由时间列中位差分反推。反推只在 9 位小数能表达该速率时成立；否则报 `RateMissing`，**不猜** |
+| **速率来源优先级** | `# rate_hz=<n>` 注释 > `--rate-hz` > 由时间列中位差分反推。反推只在 9 位小数能表达该速率时成立；否则报 `RateMissing`，**不隐式推断** |
 | 时间列等间隔性 | 相邻差分的相对偏差 > 1% 报 `NonUniformTime`；速率由中位差分倒数得到 |
 | **时间原点** | `Time(s)` 首值偏离 0 超过 1 个采样间隔时：默认拒绝（`NonZeroTimeOrigin`），`--normalize-t0` 时归一化并在 `Provenance` 记录原始偏移 |
 | 通道列 | `CH<n>V` 或 `CH<n>`；`CH<n>` 视为原始 LSB（等价 `--raw`）。超过 4 通道报 `TooManyChannels` |
@@ -318,7 +318,7 @@ Time(s),CH1V,CH2V
 
 - CLI：`./host/run.sh run -p scope-cli -- import <file.csv> [--rate-hz N] [--full-scale V] [--offset V] [--raw] [--normalize-t0] [--channel N]`
 - MCP：`scope_import_capture(path)`，路径限定为工作目录内且扩展名为 `.csv`；越界路径报错，不做隐式展开。
-- 无 `Time` 列时必须给 `--rate-hz`；既无时间列又无速率 → `RateMissing`，不猜。
+- 无 `Time` 列时必须给 `--rate-hz`；既无时间列又无速率 → `RateMissing`，不隐式推断。
 
 ### 4.4 验收
 

@@ -64,8 +64,8 @@ pub enum Parity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UartConfig {
     /// 波特率。**0 不是「自动」**——自动估计是建议性功能，未实现；
-    /// 填 0 会得到明确报错，不猜（猜错波特率会解出「看起来合理但全错」
-    /// 的字节，属于红线）。
+    /// 填 0 会得到明确报错，不做隐式推断（错误的波特率会解出「看似合理
+    /// 但全错」的字节，属于红线）。
     pub baud: u32,
     /// 数据位数。当前仅支持 8。
     pub data_bits: u8,

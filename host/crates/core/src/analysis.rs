@@ -347,7 +347,7 @@ impl AnalysisReport {
 }
 
 impl Quality {
-    /// 第一版判决：**没有模型就拒答**，不编造不确定度。
+    /// 第一版判决：**没有模型就拒答**，不生成无依据的不确定度值。
     ///
     /// P0/P2 落地后，频率、σ̂ 等会从 `Refused(NoUncertaintyModel)` 升级为
     /// `Ok{u}` 或 `Bounded`；本函数是那一层的唯一入口。

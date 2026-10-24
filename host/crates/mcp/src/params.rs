@@ -389,7 +389,8 @@ pub struct TriggerArgs {
 ///
 /// ⚠ **尚未接线上层**：字段按 `SET_CHANNEL` 的 payload 定义，但
 /// `scope_configure` 目前只把它们回显在警告里。定义出来是为了让 schema
-/// 说真话 —— 之前这里是裸的 `{"type":"object"}`，客户端根本不知道能填什么。
+/// 与实际可接受字段保持一致 —— 之前这里是裸的 `{"type":"object"}`，
+/// 客户端无从得知可填字段。
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelArgs {
@@ -550,7 +551,7 @@ pub enum ProtocolArg {
 #[serde(deny_unknown_fields)]
 pub struct UartParams {
     /// 波特率，默认 115200。**没有「自动」**：估错波特率会解出看似合理
-    /// 但全错的字节，自动估计未实现也不猜 —— 客户端必须显式确认波特率
+    /// 但全错的字节；自动估计未实现，不做隐式推断 —— 客户端必须显式确认波特率
     #[serde(default = "defaults::decode_baud")]
     #[schemars(range(min = 1, max = 4_000_000))]
     pub baud: Option<u64>,
