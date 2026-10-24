@@ -36,6 +36,7 @@ pub mod analysis;
 pub mod calib;
 pub mod capture;
 pub mod command;
+pub mod decoder;
 pub mod device;
 mod edges;
 pub mod error;
@@ -60,6 +61,13 @@ pub use capture::{
 pub use command::{
     state_name, CommandBus, DeviceConfig, DeviceInfo, Response, RetryPolicy, TIMEOUT_CONTROL,
     TIMEOUT_PING, TIMEOUT_TRIGGER,
+};
+// ⚠ 这里不重导出 `decoder::decode` 与 `decoder::Frame`：`i2c_decode::decode` 与
+// `scope_proto::Frame` 已占用根上的名字（E0252）。解码入口用全路径
+// `scope_core::decoder::decode`，解码帧类型用 `scope_core::decoder::Frame`。
+pub use decoder::{
+    to_decoded, DecodeError, DecodeParams, DecodeQuality, DecodeRequest, DecodeWarning,
+    DecodedFrames, Parity, Protocol, UartConfig, UartFrame,
 };
 pub use device::{DevicePort, FrameReader};
 pub use error::{DeviceError, LinkError, Result, ScopeError};

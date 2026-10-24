@@ -1205,6 +1205,90 @@ mod tests {
         cap
     }
 
+    /// I²C 场景是双通道 —— SCL=CH1、SDA=CH2（`next_sample` 的 ch 参数）。
+    fn two_ch_capture_of(sc: Scenario, n: usize) -> scope_core::Capture {
+        let mut g0 = WaveformGen::new(sc, 1);
+        let mut g1 = WaveformGen::new(sc, 2);
+        let mut cap = scope_core::Capture::new(1, RATE, 2, n as u32);
+        cap.channels[0] = g0.generate(0, n, RATE);
+        cap.channels[1] = g1.generate(0, n, RATE);
+        cap
+    }
+
+    /// B1 场景版：真实 `uart_115k` 场景过一遍产品级解码器（core 侧的
+    /// 同构生成器测试已过；这条对照的是场景本身）。
+    #[test]
+    fn decoder_b1_the_real_uart_scenario_decodes_to_the_truth() {
+        use scope_core::decoder::{decode, DecodeParams, DecodeRequest, Protocol, UartConfig};
+        let cap = capture_of(Scenario::Uart115k, 4096);
+        let req = DecodeRequest {
+            protocol: Protocol::Uart,
+            channels: vec![0],
+            params: DecodeParams::Uart(UartConfig::default()),
+        };
+        let out = decode(&cap, &req).expect("真实场景应能解码");
+        assert_eq!(out.frame_count(), 46, "12 位/帧 × 7.44 样点 → 46 帧");
+        assert_eq!(out.quality.frame_errors, 0, "{:?}", out.warnings);
+        let bytes = out.uart_bytes().expect("UART 应有字节序列");
+        // 真值就是 `the_uart_scenario_decodes_back_to_the_byte_sequence`
+        // 手工位采样的那份：[0x55, 0x0F, 0xA5] 循环。
+        let pattern = [0x55u8, 0x0F, 0xA5];
+        for (i, b) in bytes.iter().take(45).enumerate() {
+            assert_eq!(*b, pattern[i % 3], "第 {i} 帧字节应循环真值");
+        }
+        assert_eq!(bytes[45], 0x55, "尾帧落在循环的 0x55 上");
+    }
+
+    /// B3：I²C 适配层与直连 `decode_capture` 在三个场景上逐项一致 ——
+    /// 插件化不引入任何行为变化（帧数、字节、NACK、告警）。
+    #[test]
+    fn decoder_b3_the_i2c_adapter_matches_the_direct_call() {
+        use scope_core::decoder::{decode, DecodeParams, DecodeRequest, Frame, Protocol};
+        for sc in [Scenario::I2c100k, Scenario::I2c400k, Scenario::I2cNack] {
+            let cap = two_ch_capture_of(sc, 4096);
+            let cfg = scope_core::I2cDecodeConfig::new(0, 1);
+
+            let direct = scope_core::decode_capture(&cap, &cfg).expect("直连应成功");
+            let req = DecodeRequest {
+                protocol: Protocol::I2c,
+                channels: vec![],
+                params: DecodeParams::I2c(cfg),
+            };
+            let via_decoder = decode(&cap, &req).expect("适配层应成功");
+
+            let via = via_decoder
+                .frames
+                .iter()
+                .map(|f| match f {
+                    Frame::I2c(t) => t,
+                    Frame::Uart(_) => unreachable!("I²C 结果里不会混进 UART 帧"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                via.len(),
+                direct.transactions.len(),
+                "{}：帧数必须一致",
+                sc.name()
+            );
+            for (a, b) in via.iter().zip(direct.transactions.iter()) {
+                assert_eq!(a.bytes, b.bytes, "{}：字节序列必须一致", sc.name());
+                assert_eq!(
+                    a.has_nack(),
+                    b.has_nack(),
+                    "{}：NACK 定位必须一致",
+                    sc.name()
+                );
+                assert_eq!(a.complete, b.complete, "{}：截断标记必须一致", sc.name());
+            }
+            assert_eq!(
+                via_decoder.quality.frame_errors,
+                direct.transactions.iter().filter(|t| !t.complete).count(),
+                "{}：不完整帧数必须一致",
+                sc.name()
+            );
+        }
+    }
+
     fn measured(sc: Scenario, n: usize) -> scope_core::Measurements {
         let cap = capture_of(sc, n);
         scope_core::measure(&cap, 0, &scope_core::ChannelScale::default())
