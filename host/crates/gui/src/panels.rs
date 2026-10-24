@@ -1082,6 +1082,7 @@ fn verdict_short(v: &scope_core::Verdict) -> String {
     match v {
         scope_core::Verdict::Ok { u } => format!("±{u:.3}"),
         scope_core::Verdict::Bounded { lower } => format!("≥{lower:.1}"),
+        scope_core::Verdict::BoundedAbove { upper } => format!("≤{upper:.1}"),
         scope_core::Verdict::Refused { reason } => format!("拒答:{reason:?}"),
     }
 }

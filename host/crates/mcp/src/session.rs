@@ -952,6 +952,11 @@ impl Session {
                 if has(MetricKind::Edges) {
                     row.insert("edges".into(), json!(m.edges));
                 }
+                // 瞬态与 TIE：和 `quality` 一样始终附带 —— 它们是逐通道的
+                // 「这次测到了什么」，不是可挑的指标；`null` 字段表示测不出，
+                // 具体原因看 `quality.verdicts`。
+                row.insert("transient".into(), json!(ca.transient));
+                row.insert("tie".into(), json!(ca.tie));
                 row.insert("quality".into(), json!(ca.quality));
                 out.insert(format!("ch{ch}"), Value::Object(row));
             }
@@ -2734,8 +2739,15 @@ mod tests {
                                     "ch{ch} {label} 应落在「可信（精确）」：{vline}"
                                 );
                             } else {
+                                // 与 `analysis::value_with_unit` 同一口径：
+                                // 无量纲量的名字后面不许多一个空格。
+                                let rendered = if unit.is_empty() {
+                                    format!("{label}±{u:.3}")
+                                } else {
+                                    format!("{label}±{u:.3} {unit}")
+                                };
                                 assert!(
-                                    group_has(&groups, "可信", &format!("{label}±{u:.3} {unit}")),
+                                    group_has(&groups, "可信", &rendered),
                                     "ch{ch} {label} 的不确定度没进文本：{vline}"
                                 );
                             }
@@ -2744,6 +2756,18 @@ mod tests {
                             group_has(&groups, "下界", &format!("{label}≥{lower:.1} {unit}")),
                             "ch{ch} {label} 的下界没进文本：{vline}"
                         ),
+                        scope_core::Verdict::BoundedAbove { upper } => {
+                            // 与 `analysis::bound_with_unit` 同一口径。
+                            let rendered = if unit.is_empty() {
+                                format!("{label}≤{upper:.1}")
+                            } else {
+                                format!("{label}≤{upper:.1} {unit}")
+                            };
+                            assert!(
+                                group_has(&groups, "上界", &rendered),
+                                "ch{ch} {label} 的上界没进文本：{vline}"
+                            );
+                        }
                         scope_core::Verdict::Refused { reason } => {
                             assert!(
                                 group_has(&groups, &format!("拒答（{}）", reason.text()), label),
@@ -2753,6 +2777,110 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn transient_and_tie_values_agree_between_mcp_and_text() {
+        // A3 的补充：5 个模拟器场景里没有一个能同时满足 TIE 的 N_min=30 与
+        // ρ ≥ 2（1 kHz 场景只有约 4 个同向沿，UART 的边沿是瞬时跳变），
+        // 所以这里直接构造一条可测的慢边沿时钟，逐字段比对两个出口。
+        const LO: f64 = 500.0;
+        const HI: f64 = 3500.0;
+        const PERIOD: f64 = 32.0;
+        const WIDTH: f64 = 3.0;
+        let mut seed = 0x0BAD_F00Du32;
+        let mut cap = Capture::new(11, 1_000_000, 1, 4096);
+        cap.channels[0] = (0..4096)
+            .map(|i| {
+                let t = i as f64;
+                let k = ((t - 4.0) / PERIOD).floor();
+                let rise = 4.0 + k * PERIOD;
+                let fall = rise + PERIOD / 2.0;
+                let mut v = if t >= rise - WIDTH / 2.0 && t <= rise + WIDTH / 2.0 {
+                    LO + (HI - LO) * (t - (rise - WIDTH / 2.0)) / WIDTH
+                } else if t >= fall - WIDTH / 2.0 && t <= fall + WIDTH / 2.0 {
+                    HI - (HI - LO) * (t - (fall - WIDTH / 2.0)) / WIDTH
+                } else if (t - 4.0).rem_euclid(PERIOD) < PERIOD / 2.0 {
+                    HI
+                } else {
+                    LO
+                };
+                let mut draw = || {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    ((seed >> 16) % 2001) as f64 / 1000.0 - 1.0
+                };
+                v += 5.0 * (draw() + draw() + draw());
+                v.clamp(0.0, 4095.0).round() as u16
+            })
+            .collect();
+
+        let mut s = Session::new();
+        s.store.push(cap.clone());
+        let scales = s.calib_view.clone();
+        let text = scope_core::build_evidence(&scope_core::EvidenceInput {
+            capture: &cap,
+            scale: &scales,
+            link: "test(slow_clock)",
+            simulated: true,
+            config: None,
+            decode: None,
+            decode_req: None,
+            question: None,
+        });
+        let v = s.measure(&args(json!({ "capture_id": 11 }))).unwrap();
+        let m = &v["measurements"]["ch0"];
+
+        let tie = &m["tie"];
+        assert!(!tie.is_null(), "慢边沿时钟应报 TIE：{tie}");
+        assert!(
+            text.contains(&format!("边沿数={}", tie["n_edges"].as_u64().unwrap())),
+            "TIE 边沿数不一致：\n{text}"
+        );
+        for (key, label, precision) in [
+            ("rho", "ρ", 2),
+            ("sigma_tie_ns", "σ", 1),
+            ("mean_tie_ns", "均值", 1),
+            ("pk_pk_ns", "峰峰", 1),
+            ("resolution_floor_ns", "单沿地板", 1),
+        ] {
+            let value = tie[key].as_f64().unwrap();
+            assert!(
+                text.contains(&format!("{label}={value:.precision$}")),
+                "TIE {key}={value} 没进文本：\n{text}"
+            );
+        }
+        assert!(text.contains(&format!(
+            "[CI95 {:.1}, {:.1}]",
+            tie["ci95_low_ns"].as_f64().unwrap(),
+            tie["ci95_high_ns"].as_f64().unwrap()
+        )));
+
+        let tr = &m["transient"];
+        assert!(!tr.is_null(), "瞬态对象应始终导出");
+        for (key, label) in [
+            ("settle_2_ns", "调节(±2%)"),
+            ("settle_5_ns", "调节(±5%)"),
+            ("rc_tau_ns", "RC τ"),
+        ] {
+            if let Some(value) = tr[key].as_f64() {
+                assert!(
+                    text.contains(&format!("{label}={value:.1} ns")),
+                    "瞬态 {key}={value} 没进文本：\n{text}"
+                );
+            }
+        }
+        if let Some(value) = tr["slew_max_lsb_per_us"].as_f64() {
+            assert!(
+                text.contains(&format!("压摆(max/avg)={value:.1}/")),
+                "最大压摆率没进文本：\n{text}"
+            );
+        }
+        if let Some(n) = tr["runts"].as_u64() {
+            assert!(
+                text.contains(&format!("runt={n}")),
+                "runt 数没进文本：\n{text}"
+            );
         }
     }
 

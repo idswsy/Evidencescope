@@ -46,6 +46,8 @@ pub mod measure;
 pub mod persist;
 pub mod report;
 pub mod signal;
+pub mod tie;
+pub mod transient;
 
 pub use acquire::{acquire, acquire_cancellable, AcquireParams, TriggerEvent};
 pub use analysis::{
@@ -87,6 +89,8 @@ pub use signal::{
     detect_levels, Classification, LevelStats, LevelVerdict, NotLevelReason, SignalKind,
     UncertainReason,
 };
+pub use tie::{TieAnalysis, TieMethod, TieReason, TieStats};
+pub use transient::{TransientAnalysis, TransientReason, TransientStats};
 
 // 重导出协议类型，让上层不必直接依赖 scope-proto
 pub use scope_proto::{

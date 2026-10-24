@@ -249,7 +249,7 @@ pub(crate) fn falling_edges(s: &[u16], mid: f64) -> Vec<usize> {
 
 /// 边沿方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EdgeDir {
+pub(crate) enum EdgeDir {
     Rising,
     Falling,
 }
@@ -260,7 +260,7 @@ enum EdgeDir {
 /// 复制一份再把不等号写反是这类代码最常见的错法，而且**在对称波形上测不出来**。
 ///
 /// `window` 是搜索窗口（样点）。`None` = 不设窗口。
-fn transition_ns(
+pub(crate) fn transition_ns(
     s: &[u16],
     rate_hz: u32,
     lo: u16,

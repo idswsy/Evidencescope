@@ -491,7 +491,8 @@ pub struct MeasureArgs {
     /// 采集 id
     #[schemars(range(min = 0, max = 65535))]
     pub capture_id: u64,
-    /// 只算这些指标，省略则全算。**名字拼错会报错**，不会静默少算一项
+    /// 只算这些基础指标，省略则全算。瞬态与 TIE 分析不受此过滤，始终附带。
+    /// **名字拼错会报错**，不会静默少算一项
     pub metrics: Option<Vec<MetricKind>>,
     /// 只测这个通道，省略则每个通道都测。
     /// **给一个不存在的通道会报错**，不是回一份空测量结果

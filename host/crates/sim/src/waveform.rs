@@ -85,6 +85,20 @@ pub enum Scenario {
     /// 边沿时间这类量都被采样分辨率卡住，读数只当相对量看。真机上更慢的
     /// 波特率会好得多。
     Uart115k,
+    /// **慢边沿 + 白噪声**：1 kHz 双电平梯形，10%→90% 上升/下降各 200 µs，
+    /// 幅度 2867 LSB，叠加 σ = 40 LSB 的近似高斯白噪声（固定种子）。
+    ///
+    /// 存在的理由：非迟滞的边沿判定会在这种边沿上反复穿中点，把 1 kHz
+    /// 数成 2.0–5.2 kHz（表 A.2）。这个场景把那个缺陷变成 CI 里可复现的
+    /// 红色，而不是靠临时探针。
+    SlowEdgeNoisy,
+    /// **混叠振铃**：1 kHz 方波的每次跳变后叠加 400 kHz 衰减振铃
+    /// （半周期约 1.07 个样点，远低于「每半周期 2 样点」的下限）。
+    ///
+    /// 存在的理由：400 kHz 在 857 kHz 采样下看起来仍像一个低频正弦，
+    /// 直接测峰会报出看似正常、实际是混叠伪影的频率。该场景用于钉住
+    /// `Refused(Aliased)` 这条拒答路径。
+    RingAlias,
 }
 
 impl Scenario {
@@ -96,7 +110,7 @@ impl Scenario {
     /// 从前 `parse` 与 `name` 是**两份各写一遍的 match** —— 给某个场景改名时
     /// 只改一处，`parse` 认的名字与 `name()` 报出的名字就会悄悄分家，
     /// 而两边都编译得过。现在 `parse` 是从 `name()` 反向推出来的，分不了家。
-    pub const ALL: [Scenario; 15] = [
+    pub const ALL: [Scenario; 17] = [
         Scenario::Sine1k3v3,
         Scenario::Square50k,
         Scenario::PulseGlitch,
@@ -112,6 +126,8 @@ impl Scenario {
         Scenario::StepRing,
         Scenario::RcCharge,
         Scenario::Uart115k,
+        Scenario::SlowEdgeNoisy,
+        Scenario::RingAlias,
     ];
 
     /// 从字符串解析（供 CLI / MCP 使用）。
@@ -141,6 +157,8 @@ impl Scenario {
             Scenario::StepRing => "step_ring",
             Scenario::RcCharge => "rc_charge",
             Scenario::Uart115k => "uart_115k",
+            Scenario::SlowEdgeNoisy => "slow_edge_noisy",
+            Scenario::RingAlias => "ring_alias",
         }
     }
 
@@ -366,6 +384,10 @@ impl WaveformGen {
             Uart115k => level_to_lsb(uart_115k_bit(
                 self.sample_index.saturating_mul(UART_BAUD) / rate,
             )),
+
+            SlowEdgeNoisy => slow_edge_noisy_at(t, &mut self.rng),
+
+            RingAlias => ring_alias_at(t),
 
             I2c100k | I2c400k | I2cNack => {
                 let (scl, sda) = self.i2c.levels_at_ns(t_ns);
@@ -744,6 +766,67 @@ fn rc_charge_at(t: f64) -> f64 {
     }
 }
 
+/// 慢边沿 + 白噪声（`slow_edge_noisy`）。
+///
+/// 梯形波：250 µs 爬升 / 250 µs 高平台 / 250 µs 下降 / 250 µs 低平台。
+/// 线性边的 10%→90% 正好是 200 µs。幅度 2867 LSB，噪声 σ = 40 LSB。
+///
+/// 噪声取 **3 个均匀分布之和**（中心化后乘 80）：方差 3/12 × 80² = 40²，
+/// 且分布比单个均匀量更接近高斯 —— 真实前端噪声不是矩形分布。
+/// 用调用方的 `rng` 保证同一种子逐样点确定。
+fn slow_edge_noisy_at(t: f64, rng: &mut Rng) -> f64 {
+    /// 重复频率。
+    const HZ: f64 = 1000.0;
+    /// 0→100% 的边沿占整周期的比例（10%→90% = 0.8 × 250 µs = 200 µs）。
+    const EDGE: f64 = 0.25;
+    /// 峰峰值（LSB）。
+    const AMP: f64 = 2867.0;
+    /// 噪声标准差（LSB）。
+    const NOISE_SIGMA: f64 = 40.0;
+
+    let lo = MID_LSB as f64 - AMP / 2.0;
+    let phase = (HZ * t) % 1.0;
+    let frac = if phase < EDGE {
+        phase / EDGE
+    } else if phase < 0.5 {
+        1.0
+    } else if phase < 0.5 + EDGE {
+        (0.5 + EDGE - phase) / EDGE
+    } else {
+        0.0
+    };
+    // 3 个 U(0,1) 的和：均值 1.5、标准差 0.5；×80 得 σ = 40。
+    let noise = (rng.next_f64() + rng.next_f64() + rng.next_f64() - 1.5) * (2.0 * NOISE_SIGMA);
+    lo + AMP * frac + noise
+}
+
+/// 混叠振铃（`ring_alias`）。
+///
+/// 1 kHz 方波的每次跳变后叠加 400 kHz、τ = 5 µs 的衰减正弦，幅度 300 LSB。
+/// 400 kHz 下**半周期只有 1.07 个样点**（857142 / 800000），低于
+/// `transient::analyze` 的「每半周期 2 样点」下限 —— 此时任何峰间隔都
+/// 无法与混叠伪影区分，必须拒答而不是报数。
+fn ring_alias_at(t: f64) -> f64 {
+    /// 基波重复频率。
+    const HZ: f64 = 1000.0;
+    /// 振铃频率（> rate/4）。
+    const FD_HZ: f64 = 400_000.0;
+    /// 振铃衰减时间常数。
+    const TAU: f64 = 5.0e-6;
+    /// 振铃初始幅度（LSB）。
+    const AMP: f64 = 300.0;
+    const LO: f64 = 800.0;
+    const HI: f64 = 2800.0;
+
+    let phase = (HZ * t) % 1.0;
+    let (base, since) = if phase < 0.5 {
+        (HI, phase / HZ)
+    } else {
+        (LO, (phase - 0.5) / HZ)
+    };
+    base + AMP * (-since / TAU).exp() * (2.0 * std::f64::consts::PI * FD_HZ * since).sin()
+}
+
 /// 循环发送的字节序列。
 ///
 /// 三个值刻意选得**位模式差别大**：`0x55` 全交替、`0x0F` 半边、`0xA5` 混合。
@@ -839,7 +922,7 @@ mod tests {
         // 数量写死是有意的：它逼你在加变体时回来把数字和 `ALL` 一起改。
         assert_eq!(
             Scenario::ALL.len(),
-            15,
+            17,
             "场景数变了 —— 请同步更新 Scenario::ALL 和这个数字"
         );
 
@@ -1374,6 +1457,50 @@ mod tests {
             l.sep_lsb > 3000.0,
             "平台间隔只有 {:?} LSB —— 摆幅没拉开，退化情形就没造出来",
             l.sep_lsb
+        );
+    }
+
+    /// 慢边沿 + 白噪声：迟滞把「噪声在边沿上反复穿中点」挡成一次跃变。
+    ///
+    /// 这是 P0-b 的 CI 回归场景。旧的非迟滞边沿判定在这种波形上会数出
+    /// 许多假跃变（表 A.2：2.0–5.2 kHz）；修复后应回到 1 kHz。
+    ///
+    /// 变异：`edges_hysteretic` 的 h 退回 0 → 频率离开 1000 ± 2 Hz。
+    #[test]
+    fn slow_edge_noisy_measures_one_kilohertz() {
+        let cap = capture_of(Scenario::SlowEdgeNoisy, 4096);
+        let m = scope_core::measure(&cap, 0, &scope_core::ChannelScale::default())
+            .expect("慢边沿双电平信号必须测得出");
+        let f = m.freq_hz.expect("频率必须测得出");
+        assert!(
+            (f - 1000.0).abs() < 2.0,
+            "慢边沿 + 噪声下频率实测 {f:.2} Hz；迟滞应当把它压回 1000 Hz"
+        );
+        let r = m.rise_ns.expect("上升时间必须测得出");
+        assert!(
+            (r - 200_000.0).abs() < 30_000.0,
+            "10%→90% 上升时间实测 {r:.0} ns，场景定义是 200 000 ns"
+        );
+    }
+
+    /// `ring_alias` 的振铃半周期不足 2 个样点 —— 必须拒答，不能给一个
+    /// 看起来正常、实际是混叠伪影的频率数字。
+    ///
+    /// 变异：`transient::analyze` 的 `half_samples < 2.0` 改成 `< 1.0` → 红。
+    #[test]
+    fn ring_alias_is_refused_as_aliased() {
+        let cap = capture_of(Scenario::RingAlias, 4096);
+        let a = scope_core::transient::analyze(&cap.channels[0], RATE);
+        assert!(
+            a.stats.ring_freq_hz.is_none(),
+            "混叠场景不得给出振铃频率数字，实测 {:?}",
+            a.stats.ring_freq_hz
+        );
+        assert_eq!(
+            a.reasons.get("ring_freq_hz"),
+            Some(&scope_core::TransientReason::Aliased),
+            "应拒答为 Aliased；实际原因 {:?}",
+            a.reasons.get("ring_freq_hz")
         );
     }
 

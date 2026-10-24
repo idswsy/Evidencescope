@@ -382,7 +382,7 @@ const TOOLS: &[ToolSpec] = &[
     ),
     tool!(
         "scope_measure",
-        "对指定采集做测量：频率/峰峰值/均值/RMS/占空比/上升与下降时间/过冲/下冲/脉宽/跃变数。每个量带 quality 判决；返回 schema/provenance/quality，单位与语义不变",
+        "对指定采集做测量：频率/峰峰值/均值/RMS/占空比/上升与下降时间/过冲/下冲/脉宽/跃变数，另附瞬态（振铃/阻尼/调节/RC/压摆/runt）与 TIE（σ/周期抖动）。每个量带 quality 判决；返回 schema/provenance/quality，单位与语义不变",
         "主机侧计算（精度最高）；流模式可走 MEASURE",
         "总是",
         ToolAnnotations::READ_ONLY,
@@ -1408,7 +1408,8 @@ mod tests {
         assert_eq!(
             label(&connect, "sim_scenario"),
             "sine_1k_3v3|square_50k|pulse_glitch|noise|dc|am|i2c_100k|i2c_400k|i2c_nack|\
-             pwm_1k_25|pwm_1k_75|pwm_1k_5|step_ring|rc_charge|uart_115k?"
+             pwm_1k_25|pwm_1k_75|pwm_1k_5|step_ring|rc_charge|uart_115k|\
+             slow_edge_noisy|ring_alias?"
         );
 
         // 可选数组、可选字符串

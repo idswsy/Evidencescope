@@ -8,6 +8,7 @@
 //!
 //! - [`Verdict::Ok`]：有数值不确定度；
 //! - [`Verdict::Bounded`]：只能给下界（例如亚样点边沿）；
+//! - [`Verdict::BoundedAbove`]：只能给上界（例如单峰振铃的频率上界）；
 //! - [`Verdict::Refused`]：不出数，且必须说明原因。
 //!
 //! # 边界
@@ -29,6 +30,8 @@ use crate::decoder::{DecodeRequest, DecodedFrames};
 use crate::edges::{edges_hysteretic, sigma_hat};
 use crate::measure::{filter_gaps, measure, Measurements};
 use crate::signal::{detect_levels, UncertainReason};
+use crate::tie::{self, TieAnalysis, TieReason, TieStats};
+use crate::transient::{self, TransientAnalysis, TransientReason, TransientStats};
 
 /// 对外 schema 名。
 pub const ANALYSIS_SCHEMA: &str = "analysis/v1";
@@ -110,6 +113,12 @@ pub struct ChannelAnalysis {
     pub channel: usize,
     /// 内部测量结果，字段与语义完全不变。
     pub measurements: Measurements,
+    /// 瞬态特征。逐量 `Option`：测不出的量在 `quality.verdicts` 里带原因。
+    #[serde(default)]
+    pub transient: TransientStats,
+    /// TIE / 周期抖动统计量。拒答时为 `None`，原因在 `quality.verdicts`。
+    #[serde(default)]
+    pub tie: Option<TieStats>,
     /// 每个量的可信度判决。
     pub quality: Quality,
 }
@@ -141,6 +150,11 @@ pub enum Verdict {
         /// 下界。
         lower: f64,
     },
+    /// 只能给上界。
+    BoundedAbove {
+        /// 上界。
+        upper: f64,
+    },
     /// 不出数，并说明原因。
     Refused {
         /// 拒答原因。
@@ -157,10 +171,16 @@ pub enum RefuseReason {
     TooSmallAmplitude,
     /// 没有周期。
     NoPeriodicity,
+    /// 同向边沿太少（TIE 至少需要 30 条）。
+    TooFewEdges,
+    /// 边沿快于采样栅格，插值时刻不反映真实边沿（TIE）。
+    EdgeTooFastForTie,
     /// 间隔不稳定。
     IntervalUnstable,
     /// 窗内频率漂移。
     FrequencyDrift,
+    /// 单次采集内周期明显漂移（TIE 非平稳）。
+    NonStationary,
     /// 采样密度不足（混叠）。
     Aliased,
     /// 形状不在可判范围。
@@ -183,8 +203,11 @@ impl RefuseReason {
             RefuseReason::TooFewSamples => "样点太少",
             RefuseReason::TooSmallAmplitude => "幅度太小",
             RefuseReason::NoPeriodicity => "无周期",
+            RefuseReason::TooFewEdges => "边沿太少",
+            RefuseReason::EdgeTooFastForTie => "边沿快于采样栅格",
             RefuseReason::IntervalUnstable => "间隔不稳",
             RefuseReason::FrequencyDrift => "频率漂移",
+            RefuseReason::NonStationary => "周期漂移",
             RefuseReason::Aliased => "采样密度不足",
             RefuseReason::ShapeUnrecognized => "形状不在可判范围",
             RefuseReason::CalibrationMissing => "未标定",
@@ -205,6 +228,31 @@ impl From<UncertainReason> for RefuseReason {
             UncertainReason::FrequencyDrift => Self::FrequencyDrift,
             UncertainReason::Aliased => Self::Aliased,
             UncertainReason::ShapeUnrecognized => Self::ShapeUnrecognized,
+        }
+    }
+}
+
+impl From<TieReason> for RefuseReason {
+    fn from(r: TieReason) -> Self {
+        match r {
+            TieReason::TooFewSamples => Self::TooFewSamples,
+            TieReason::TooFewEdges => Self::TooFewEdges,
+            TieReason::EdgeTooFastForTie => Self::EdgeTooFastForTie,
+            TieReason::Aliased => Self::Aliased,
+            TieReason::IntervalUnstable => Self::IntervalUnstable,
+            TieReason::NonStationary => Self::NonStationary,
+            TieReason::ShapeUnrecognized => Self::ShapeUnrecognized,
+        }
+    }
+}
+
+impl From<TransientReason> for RefuseReason {
+    fn from(r: TransientReason) -> Self {
+        match r {
+            TransientReason::TooFewSamples => Self::TooFewSamples,
+            TransientReason::NotApplicable => Self::NotApplicable,
+            TransientReason::ShapeUnrecognized => Self::ShapeUnrecognized,
+            TransientReason::Aliased => Self::Aliased,
         }
     }
 }
@@ -249,10 +297,15 @@ impl AnalysisReport {
             let Some(m) = measure(capture, ch, &scale.get(ch)) else {
                 continue;
             };
-            let quality = Quality::empty(ch, capture, scale, &m);
+            let samples = capture.samples(ch).unwrap_or(&[]);
+            let transient = transient::analyze(samples, capture.rate_hz);
+            let tie = tie::analyze(samples, capture.rate_hz);
+            let quality = Quality::with_analyses(ch, capture, scale, &m, &transient, &tie);
             channels.push(ChannelAnalysis {
                 channel: ch,
                 measurements: m,
+                transient: transient.stats,
+                tie: tie.stats,
                 quality,
             });
         }
@@ -299,6 +352,21 @@ impl Quality {
     /// P0/P2 落地后，频率、σ̂ 等会从 `Refused(NoUncertaintyModel)` 升级为
     /// `Ok{u}` 或 `Bounded`；本函数是那一层的唯一入口。
     pub fn empty(ch: usize, cap: &Capture, scale: &ScaleSet, m: &Measurements) -> Quality {
+        let samples = cap.samples(ch).unwrap_or(&[]);
+        let transient = transient::analyze(samples, cap.rate_hz);
+        let tie = tie::analyze(samples, cap.rate_hz);
+        Self::with_analyses(ch, cap, scale, m, &transient, &tie)
+    }
+
+    /// 与 [`Self::empty`] 相同，但复用调用方已经算好的瞬态 / TIE。
+    fn with_analyses(
+        ch: usize,
+        cap: &Capture,
+        scale: &ScaleSet,
+        m: &Measurements,
+        transient: &TransientAnalysis,
+        tie: &TieAnalysis,
+    ) -> Quality {
         let mut verdicts = BTreeMap::new();
         let s = cap.samples(ch).unwrap_or(&[]);
         let summary = cap.summary(ch);
@@ -395,11 +463,125 @@ impl Quality {
         // 计数没有「不确定度」语义：数出来的就是数出来的。
         verdicts.insert("edges".into(), Verdict::Ok { u: 0.0 });
 
+        transient_verdicts(transient, &mut verdicts);
+        tie_verdicts(tie, &mut verdicts);
+
         Quality {
             noise_lsb: noise,
             hysteresis_lsb: noise.map(|_| h),
             verdicts,
         }
+    }
+}
+
+/// 瞬态量的判决。
+///
+/// 只有整数 runt 计数是精确值；其余量有数但**没有不确定度模型**，
+/// 一律 `Refused(NoUncertaintyModel)` —— 不拿 `Ok{u:0}` 冒充。
+fn transient_verdicts(tr: &TransientAnalysis, verdicts: &mut BTreeMap<String, Verdict>) {
+    let reason = |key: &str| {
+        refused(RefuseReason::from(
+            *tr.reasons
+                .get(key)
+                .unwrap_or(&TransientReason::ShapeUnrecognized),
+        ))
+    };
+
+    verdicts.insert(
+        "ring_freq_hz".into(),
+        if tr.stats.ring_freq_hz.is_some() {
+            refused(RefuseReason::NoUncertaintyModel)
+        } else {
+            reason("ring_freq_hz")
+        },
+    );
+    verdicts.insert(
+        "ring_freq_upper_hz".into(),
+        match (tr.stats.ring_freq_upper_hz, tr.stats.ring_freq_hz) {
+            (Some(upper), _) => Verdict::BoundedAbove { upper },
+            (None, Some(_)) => refused(RefuseReason::NotApplicable),
+            (None, None) => reason("ring_freq_hz"),
+        },
+    );
+
+    for (key, present) in [
+        ("damping_ratio", tr.stats.damping_ratio.is_some()),
+        ("settle_2_ns", tr.stats.settle_2_ns.is_some()),
+        ("settle_5_ns", tr.stats.settle_5_ns.is_some()),
+        ("rc_tau_ns", tr.stats.rc_tau_ns.is_some()),
+        (
+            "slew_max_lsb_per_us",
+            tr.stats.slew_max_lsb_per_us.is_some(),
+        ),
+        (
+            "slew_avg_lsb_per_us",
+            tr.stats.slew_avg_lsb_per_us.is_some(),
+        ),
+    ] {
+        verdicts.insert(
+            key.into(),
+            if present {
+                refused(RefuseReason::NoUncertaintyModel)
+            } else {
+                reason(key)
+            },
+        );
+    }
+
+    verdicts.insert(
+        "runts".into(),
+        match tr.stats.runts {
+            Some(_) => Verdict::Ok { u: 0.0 },
+            None => reason("runts"),
+        },
+    );
+}
+
+/// TIE 量的判决。
+///
+/// 只有边沿数（整数计数）与 σ_TIE 有模型：docs/11 §4.4 给出 σ 的相对
+/// 不确定度 `1/√(2(n−1))`（n = 30 时约 13%）。其余量（均值、峰峰值、
+/// 周期抖动、ρ、单沿地板）没有不确定度模型，拒答；卡方区间本身随
+/// `TieStats` 导出，作为 σ 的区间，不再单独当成一个量。
+fn tie_verdicts(tie: &TieAnalysis, verdicts: &mut BTreeMap<String, Verdict>) {
+    const KEYS: [&str; 8] = [
+        "tie_n_edges",
+        "tie_rho",
+        "tie_sigma_ns",
+        "tie_mean_ns",
+        "tie_pk_pk_ns",
+        "tie_pj_rms_ns",
+        "tie_pj_pk_pk_ns",
+        "tie_resolution_floor_ns",
+    ];
+
+    let Some(t) = &tie.stats else {
+        let reason = refused(RefuseReason::from(
+            tie.reason.unwrap_or(TieReason::ShapeUnrecognized),
+        ));
+        for key in KEYS {
+            verdicts.insert(key.into(), reason.clone());
+        }
+        return;
+    };
+
+    verdicts.insert("tie_n_edges".into(), Verdict::Ok { u: 0.0 });
+    let df = t.n_edges.saturating_sub(1) as f64;
+    let u = if df > 0.0 {
+        t.sigma_tie_ns / (2.0 * df).sqrt()
+    } else {
+        0.0
+    };
+    verdicts.insert("tie_sigma_ns".into(), Verdict::Ok { u });
+    for key in [
+        "tie_rho",
+        "tie_mean_ns",
+        "tie_pk_pk_ns",
+        "tie_pj_rms_ns",
+        "tie_pj_pk_pk_ns",
+        "tie_resolution_floor_ns",
+    ] {
+        verdicts.insert(key.into(), refused(RefuseReason::NoUncertaintyModel));
     }
 }
 
@@ -426,7 +608,7 @@ fn calibration_state(scale: &ScaleSet) -> CalibrationState {
 ///
 /// 表里没有的量不会消失 —— [`verdict_line`] 会把它们按原始键名列出，
 /// 提醒作者补显示名，而不是让一个量从模型眼里静默消失。
-const VERDICT_KEYS: [(&str, &str, &str); 14] = [
+const VERDICT_KEYS: [(&str, &str, &str); 31] = [
     ("vpp", "Vpp", "V"),
     ("min", "min", "V"),
     ("max", "max", "V"),
@@ -441,6 +623,23 @@ const VERDICT_KEYS: [(&str, &str, &str); 14] = [
     ("undershoot_pct", "下冲", "%"),
     ("high_ns", "高电平脉宽", "ns"),
     ("edges", "跃变数", "次"),
+    ("ring_freq_hz", "振铃频率", "Hz"),
+    ("ring_freq_upper_hz", "振铃频率上界", "Hz"),
+    ("damping_ratio", "阻尼比", "无量纲"),
+    ("settle_2_ns", "调节时间(±2%)", "ns"),
+    ("settle_5_ns", "调节时间(±5%)", "ns"),
+    ("rc_tau_ns", "RC τ", "ns"),
+    ("slew_max_lsb_per_us", "最大压摆率", "LSB/µs"),
+    ("slew_avg_lsb_per_us", "平均压摆率", "LSB/µs"),
+    ("runts", "runt 数", "个"),
+    ("tie_n_edges", "TIE 边沿数", "个"),
+    ("tie_rho", "ρ 比值", "无量纲"),
+    ("tie_sigma_ns", "TIE σ", "ns"),
+    ("tie_mean_ns", "TIE 均值", "ns"),
+    ("tie_pk_pk_ns", "TIE 峰峰值", "ns"),
+    ("tie_pj_rms_ns", "周期抖动 RMS", "ns"),
+    ("tie_pj_pk_pk_ns", "周期抖动峰峰值", "ns"),
+    ("tie_resolution_floor_ns", "单沿分辨率地板", "ns"),
 ];
 
 /// 证据包里某个量的显示名与单位。
@@ -460,7 +659,7 @@ pub fn quantity_label(key: &str) -> Option<(&'static str, &'static str)> {
 /// 线索知道这个量其实是 `Refused`。MCP 的 JSON 出口一直带着 `quality`，
 /// 文本出口缺这一行就破了「同一份结论给人和给模型」。
 ///
-/// 输出按「判决类别」分组，而不是逐量罗列：14 个字段逐个写成
+/// 输出按「判决类别」分组，而不是逐量罗列：31 个字段逐个写成
 /// `Vpp=拒答(未标定)` 会占掉半屏，且同类原因重复到无法阅读。
 fn verdict_line(q: &Quality) -> Option<String> {
     if q.verdicts.is_empty() {
@@ -470,6 +669,7 @@ fn verdict_line(q: &Quality) -> Option<String> {
     let mut exact: Vec<&str> = Vec::new();
     let mut uncertain: Vec<String> = Vec::new();
     let mut bounds: Vec<String> = Vec::new();
+    let mut bounds_above: Vec<String> = Vec::new();
     // 原因 → 该原因下的量。用 Vec 而非 map：保持 VERDICT_KEYS 的顺序。
     let mut refused: Vec<(&'static str, Vec<String>)> = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
@@ -487,9 +687,12 @@ fn verdict_line(q: &Quality) -> Option<String> {
         match q.verdicts.get(key) {
             None => {}
             Some(Verdict::Ok { u }) if *u == 0.0 => exact.push(label),
-            Some(Verdict::Ok { u }) => uncertain.push(format!("{label}±{u:.3} {unit}")),
+            Some(Verdict::Ok { u }) => uncertain.push(value_with_unit(label, *u, unit)),
             Some(Verdict::Bounded { lower }) => {
-                bounds.push(format!("{label}≥{lower:.1} {unit}"));
+                bounds.push(bound_with_unit(label, '≥', *lower, unit));
+            }
+            Some(Verdict::BoundedAbove { upper }) => {
+                bounds_above.push(bound_with_unit(label, '≤', *upper, unit));
             }
             Some(Verdict::Refused { reason }) => {
                 push_refused(reason.text(), label.to_string());
@@ -506,6 +709,7 @@ fn verdict_line(q: &Quality) -> Option<String> {
             Verdict::Ok { u } if *u == 0.0 => uncertain.push(key.clone()),
             Verdict::Ok { u } => uncertain.push(format!("{key}±{u:.3}")),
             Verdict::Bounded { lower } => bounds.push(format!("{key}≥{lower:.1}")),
+            Verdict::BoundedAbove { upper } => bounds_above.push(format!("{key}≤{upper:.1}")),
             Verdict::Refused { reason } => push_refused(reason.text(), key.clone()),
         }
     }
@@ -520,15 +724,42 @@ fn verdict_line(q: &Quality) -> Option<String> {
     if !bounds.is_empty() {
         parts.push(format!("下界: {}", bounds.join("、")));
     }
+    if !bounds_above.is_empty() {
+        parts.push(format!("上界: {}", bounds_above.join("、")));
+    }
     for (reason, labels) in refused {
         parts.push(format!("拒答（{reason}）: {}", labels.join("/")));
     }
     Some(parts.join("；"))
 }
 
+/// 带单位的值。无量纲量的单位为空串，不留下多余空格。
+fn value_with_unit(label: &str, u: f64, unit: &str) -> String {
+    if unit.is_empty() {
+        format!("{label}±{u:.3}")
+    } else {
+        format!("{label}±{u:.3} {unit}")
+    }
+}
+
+fn bound_with_unit(label: &str, sign: char, value: f64, unit: &str) -> String {
+    if unit.is_empty() {
+        format!("{label}{sign}{value:.1}")
+    } else {
+        format!("{label}{sign}{value:.1} {unit}")
+    }
+}
+
 /// 把一次采集渲染成证据包文本 —— **唯一对外入口**。
 pub fn render_text(report: &AnalysisReport, ctx: &EvidenceContext<'_>) -> String {
     crate::report::render_sections(report, ctx)
+}
+
+fn opt_ns(v: Option<f64>) -> String {
+    match v {
+        Some(x) => format!("{x:.1} ns"),
+        None => "测不出".to_string(),
+    }
 }
 
 /// 通道测量段。放在这里是为了让「怎么解释 Measurements」只有一处。
@@ -589,6 +820,68 @@ pub(crate) fn channels_text(s: &mut String, report: &AnalysisReport, cap: &Captu
             "     过冲/下冲={over}/{under}  高电平脉宽={high}  跃变数={}",
             m.edges
         );
+
+        let tr = &ca.transient;
+        // 上界用「≤」而不是「=≤」：只有上界时读作「振铃≤…」，与可信度行的
+        // 「振铃频率上界≤…」同一口径。
+        let ring = match (tr.ring_freq_hz, tr.ring_freq_upper_hz) {
+            (Some(f), _) => format!("={f:.1} Hz"),
+            (None, Some(u)) => format!("≤{u:.1} Hz"),
+            (None, None) => "=测不出".to_string(),
+        };
+        let zeta = match tr.damping_ratio {
+            Some(z) => format!("{z:.3}"),
+            None => "测不出".to_string(),
+        };
+        let slew = match (tr.slew_max_lsb_per_us, tr.slew_avg_lsb_per_us) {
+            (Some(a), Some(b)) => format!("{a:.1}/{b:.1} LSB/µs"),
+            _ => "测不出".to_string(),
+        };
+        let runts = match tr.runts {
+            Some(n) => n.to_string(),
+            None => "测不出".to_string(),
+        };
+        let _ = writeln!(
+            s,
+            "     瞬态: 振铃{ring}  阻尼比={zeta}  调节(±2%)={}  调节(±5%)={}",
+            opt_ns(tr.settle_2_ns),
+            opt_ns(tr.settle_5_ns)
+        );
+        let _ = writeln!(
+            s,
+            "           RC τ={}  压摆(max/avg)={slew}  runt={runts}",
+            opt_ns(tr.rc_tau_ns)
+        );
+
+        match &ca.tie {
+            Some(t) => {
+                let grid = if t.grid_limited { "是" } else { "否" };
+                let _ = writeln!(
+                    s,
+                    "     TIE: 边沿数={} ρ={:.2} σ={:.1} ns [CI95 {:.1}, {:.1}] 均值={:.1} ns 峰峰={:.1} ns",
+                    t.n_edges,
+                    t.rho,
+                    t.sigma_tie_ns,
+                    t.ci95_low_ns,
+                    t.ci95_high_ns,
+                    t.mean_tie_ns,
+                    t.pk_pk_ns
+                );
+                let _ = writeln!(
+                    s,
+                    "          周期抖动 RMS={:.1} ns 峰峰={:.1} ns 单沿地板={:.1} ns 网格受限={grid}",
+                    t.period_jitter_rms_ns, t.period_jitter_pk_pk_ns, t.resolution_floor_ns
+                );
+            }
+            None => {
+                let reason = match ca.quality.verdicts.get("tie_sigma_ns") {
+                    Some(Verdict::Refused { reason }) => reason.text(),
+                    _ => "测不出",
+                };
+                let _ = writeln!(s, "     TIE: 测不出（{reason}）");
+            }
+        }
+
         if let Some(v) = verdict_line(&ca.quality) {
             let _ = writeln!(s, "     可信度: {v}");
         }
@@ -605,6 +898,7 @@ pub(crate) fn channels_text(s: &mut String, report: &AnalysisReport, cap: &Captu
         s,
         "注 2：「可信（精确）」表示值确定但没有不确定度模型（如整数计数）；\
          「可信」带 ± 的才是含不确定度的数；「下界」只保证不小于该值；\
+         「上界」只保证不大于该值；\
          「拒答」的量没有可信区间，上面印出的数只用于定位，**不要引用**。"
     );
 }
@@ -643,8 +937,23 @@ mod tests {
         let report = AnalysisReport::from_capture(&cap, &scale, "sim(square)", true);
         let q = &report.channels[0].quality;
         for (key, verdict) in &q.verdicts {
-            if key == "edges" {
-                assert!(matches!(verdict, Verdict::Ok { u } if *u == 0.0));
+            // 整数计数：数出来的就是数出来的；测不出时可以是 Refused。
+            let exact_count = matches!(key.as_str(), "edges" | "runts" | "tie_n_edges");
+            if exact_count {
+                assert!(
+                    matches!(verdict, Verdict::Ok { u } if *u == 0.0)
+                        || matches!(verdict, Verdict::Refused { .. }),
+                    "{key} 只能是精确计数或带原因的拒答：{verdict:?}"
+                );
+                continue;
+            }
+            // σ_TIE 是唯一有不确定度模型的新量（docs/11 §4.4）。
+            if key == "tie_sigma_ns" {
+                match verdict {
+                    Verdict::Ok { u } => assert!(*u >= 0.0),
+                    Verdict::Refused { .. } => {}
+                    other => panic!("tie_sigma_ns 不应是 {other:?}"),
+                }
                 continue;
             }
             assert!(
@@ -730,6 +1039,203 @@ mod tests {
         let report = AnalysisReport::from_capture(&cap, &scale, "sim(square)", true);
         let direct = measure(&cap, 0, &scale.get(0)).expect("应测得出");
         assert_eq!(report.channels[0].measurements, direct);
+    }
+
+    /// 1 MHz、周期 32 样点、10–90% = 2.4 样点的方波：TIE 可用
+    /// （ρ = 2.4 ≥ 2），叠加近似高斯噪声让 σ_TIE > 0。
+    fn slow_clock_capture() -> Capture {
+        const LO: f64 = 500.0;
+        const HI: f64 = 3500.0;
+        const PERIOD: f64 = 32.0;
+        const WIDTH: f64 = 3.0;
+        let mut cap = Capture::new(11, 1_000_000, 1, 4096);
+        let mut seed = 0x5EED_1234u32;
+        cap.channels[0] = (0..4096)
+            .map(|i| {
+                let t = i as f64;
+                let k = ((t - 4.0) / PERIOD).floor();
+                let rise = 4.0 + k * PERIOD;
+                let fall = rise + PERIOD / 2.0;
+                let mut v = if t >= rise - WIDTH / 2.0 && t <= rise + WIDTH / 2.0 {
+                    LO + (HI - LO) * (t - (rise - WIDTH / 2.0)) / WIDTH
+                } else if t >= fall - WIDTH / 2.0 && t <= fall + WIDTH / 2.0 {
+                    HI - (HI - LO) * (t - (fall - WIDTH / 2.0)) / WIDTH
+                } else if (t - 4.0).rem_euclid(PERIOD) < PERIOD / 2.0 {
+                    HI
+                } else {
+                    LO
+                };
+                let mut draw = || {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    ((seed >> 16) % 2001) as f64 / 1000.0 - 1.0
+                };
+                v += 5.0 * (draw() + draw() + draw());
+                v.clamp(0.0, 4095.0).round() as u16
+            })
+            .collect();
+        cap
+    }
+
+    /// 单次阶跃 + 一个过冲峰：瞬态只能给振铃频率的**上界**。
+    fn single_overshoot_capture() -> Capture {
+        let mut cap = Capture::new(13, 1_000_000, 1, 4096);
+        let mut s = vec![500u16; 4096];
+        // 4 样点的上升段，然后从 3800 指数回落并稳定到 3500。
+        for i in 0..4 {
+            s[100 + i] = 500 + 825 * (i as u16 + 1);
+        }
+        for (i, v) in s.iter_mut().enumerate().skip(104) {
+            *v = (3500.0 + 300.0 * (-((i - 104) as f64) / 30.0).exp()).round() as u16;
+        }
+        cap.channels[0] = s;
+        cap
+    }
+
+    #[test]
+    fn tie_and_transient_are_exported_with_verdicts() {
+        let cap = slow_clock_capture();
+        let scale = ScaleSet::uncalibrated(1);
+        let report = AnalysisReport::from_capture(&cap, &scale, "sim(slow_clock)", true);
+        let ca = &report.channels[0];
+        let q = &ca.quality;
+
+        let t = ca.tie.as_ref().expect("慢边沿时钟应报 TIE");
+        assert!(t.n_edges >= 30, "边沿数 {} 不足", t.n_edges);
+        assert!(t.sigma_tie_ns > 0.0, "含噪时钟的 σ_TIE 应大于 0");
+
+        // σ 的不确定度模型来自 docs/11 §4.4：σ 的相对不确定度 1/√(2(n−1))。
+        match q.verdicts.get("tie_sigma_ns") {
+            Some(Verdict::Ok { u }) => {
+                let want = t.sigma_tie_ns / (2.0 * (t.n_edges - 1) as f64).sqrt();
+                assert!(
+                    (u - want).abs() < 1e-9,
+                    "σ 的不确定度 {u} 与 1/√(2(n−1)) 模型 {want} 不符"
+                );
+            }
+            other => panic!("tie_sigma_ns 应有模型并给 Ok，实测 {other:?}"),
+        }
+        assert_eq!(q.verdicts.get("tie_n_edges"), Some(&Verdict::Ok { u: 0.0 }));
+        for key in [
+            "tie_rho",
+            "tie_mean_ns",
+            "tie_pk_pk_ns",
+            "tie_pj_rms_ns",
+            "tie_pj_pk_pk_ns",
+            "tie_resolution_floor_ns",
+        ] {
+            assert_eq!(
+                q.verdicts.get(key),
+                Some(&Verdict::Refused {
+                    reason: RefuseReason::NoUncertaintyModel
+                }),
+                "{key} 没有不确定度模型，必须拒答"
+            );
+        }
+
+        // 瞬态：有值的量都进了出口；整数计数是精确值。
+        assert!(
+            ca.transient.slew_max_lsb_per_us.is_some(),
+            "线性边沿应能给出压摆率"
+        );
+        // 这个合成时钟的慢边沿会把 k-means 平台中心拉向中位，±5% 容差带
+        // 不再覆盖平台 —— `detect_levels` 判不出双电平，runt 只能「不适用」。
+        // 这里**不能**编一个 0：双电平的精确计数由下面的干净方波覆盖。
+        assert_eq!(
+            q.verdicts.get("runts"),
+            Some(&Verdict::Refused {
+                reason: RefuseReason::NotApplicable
+            }),
+            "双电平判不出时 runt 必须不适用"
+        );
+        assert!(
+            matches!(
+                q.verdicts.get("slew_max_lsb_per_us"),
+                Some(Verdict::Refused {
+                    reason: RefuseReason::NoUncertaintyModel
+                })
+            ),
+            "压摆率没有不确定度模型：{:?}",
+            q.verdicts.get("slew_max_lsb_per_us")
+        );
+
+        // 所有出口量都必须有显示名，否则 A3 会在缺名时报错。
+        for key in q.verdicts.keys() {
+            assert!(quantity_label(key).is_some(), "{key} 没有补进 VERDICT_KEYS");
+        }
+
+        // 序列化合同：新字段可往返。
+        let json = serde_json::to_string(&report).expect("序列化失败");
+        let back: AnalysisReport = serde_json::from_str(&json).expect("反序列化失败");
+        assert_eq!(report, back);
+    }
+
+    #[test]
+    fn a_fast_edge_capture_refuses_tie_with_a_reason() {
+        let cap = square_capture();
+        let scale = ScaleSet::uncalibrated(1);
+        let report = AnalysisReport::from_capture(&cap, &scale, "sim(square)", true);
+        let ca = &report.channels[0];
+        assert!(ca.tie.is_none(), "瞬时边沿不能报 TIE");
+        // 干净方波是双电平 —— runt 计数是精确值，可以 Ok。
+        assert_eq!(
+            ca.quality.verdicts.get("runts"),
+            Some(&Verdict::Ok { u: 0.0 }),
+            "双电平方波应给出精确的 runt 计数"
+        );
+        for key in [
+            "tie_n_edges",
+            "tie_rho",
+            "tie_sigma_ns",
+            "tie_mean_ns",
+            "tie_pk_pk_ns",
+            "tie_pj_rms_ns",
+            "tie_pj_pk_pk_ns",
+            "tie_resolution_floor_ns",
+        ] {
+            assert_eq!(
+                ca.quality.verdicts.get(key),
+                Some(&Verdict::Refused {
+                    reason: RefuseReason::EdgeTooFastForTie
+                }),
+                "{key} 应带「边沿快于栅格」的拒答原因"
+            );
+        }
+    }
+
+    #[test]
+    fn an_upper_bound_is_exported_as_bounded_above() {
+        let cap = single_overshoot_capture();
+        let scale = ScaleSet::uncalibrated(1);
+        let report = AnalysisReport::from_capture(&cap, &scale, "sim(step)", true);
+        let ca = &report.channels[0];
+        assert_eq!(ca.transient.ring_freq_hz, None);
+        let upper = ca.transient.ring_freq_upper_hz.expect("单峰应给上界");
+        assert_eq!(
+            ca.quality.verdicts.get("ring_freq_upper_hz"),
+            Some(&Verdict::BoundedAbove { upper }),
+            "上界不能写成下界"
+        );
+
+        let ctx = EvidenceContext {
+            capture: &cap,
+            scale: &scale,
+            link: "sim(step)",
+            simulated: true,
+            config: None,
+            decode: None,
+            decode_req: None,
+            question: None,
+        };
+        let text = render_text(&report, &ctx);
+        let line = verdict_line(&ca.quality).expect("应有可信度行");
+        assert!(
+            line.contains(&format!("上界: 振铃频率上界≤{upper:.1} Hz")),
+            "上界没进可信度行：{line}"
+        );
+        assert!(
+            text.contains(&format!("振铃≤{upper:.1} Hz")),
+            "上界没进瞬态数值行：{text}"
+        );
     }
 
     #[test]

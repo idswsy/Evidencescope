@@ -388,6 +388,12 @@ enum ScenarioArg {
     /// 115200 baud 串行数据，0x55 连发
     #[value(name = "uart_115k")]
     Uart115k,
+    /// 1 kHz 慢边沿（10-90% 200 µs）+ σ=40 LSB 白噪声
+    #[value(name = "slow_edge_noisy")]
+    SlowEdgeNoisy,
+    /// 400 kHz 混叠振铃 —— 用于验证 Refused(Aliased)
+    #[value(name = "ring_alias")]
+    RingAlias,
 }
 
 impl From<ScenarioArg> for Scenario {
@@ -408,6 +414,8 @@ impl From<ScenarioArg> for Scenario {
             ScenarioArg::StepRing => Scenario::StepRing,
             ScenarioArg::RcCharge => Scenario::RcCharge,
             ScenarioArg::Uart115k => Scenario::Uart115k,
+            ScenarioArg::SlowEdgeNoisy => Scenario::SlowEdgeNoisy,
+            ScenarioArg::RingAlias => Scenario::RingAlias,
         }
     }
 }
