@@ -1,6 +1,6 @@
 /**
  * @file    protocol.c
- * @brief   F103 Agent Scope 线协议编解码实现
+ * @brief   EvidenceScope 线协议编解码实现
  *
  * 纯 C，不依赖任何 HAL / 寄存器头文件 —— 可在 PC 上用 gcc 直接编译测试。
  * 无动态内存分配，所有状态由调用者持有。

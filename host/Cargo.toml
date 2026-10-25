@@ -16,8 +16,8 @@ version      = "0.1.0"
 edition      = "2021"
 rust-version = "1.75"
 license      = "GPL-3.0"
-repository   = "https://github.com/OWNER/i2c-scope-f103"
-authors      = ["F103 Agent Scope Team"]
+repository   = "https://github.com/idswsy/evidencescope"
+authors      = ["EvidenceScope Team"]
 
 [workspace.dependencies]
 scope-proto            = { path = "crates/proto" }

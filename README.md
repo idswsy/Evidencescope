@@ -1,6 +1,6 @@
 # EvidenceScope
 
-[![CI](https://github.com/idswsy/f103-agent-scope/actions/workflows/ci.yml/badge.svg)](https://github.com/idswsy/f103-agent-scope/actions/workflows/ci.yml)
+[![CI](https://github.com/idswsy/evidencescope/actions/workflows/ci.yml/badge.svg)](https://github.com/idswsy/evidencescope/actions/workflows/ci.yml)
 
 > 一台可由 AI Agent 直接操控的数字示波器与 I2C 总线分析仪。
 > 硬件：立创开源《简易数字示波器设计（入门版）》插件底板 +

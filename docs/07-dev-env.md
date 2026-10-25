@@ -63,8 +63,8 @@ brew install gcc python3                        # macOS
 ## 2. 执行验证（10 分钟）
 
 ```bash
-git clone https://github.com/idswsy/f103-agent-scope.git
-cd f103-agent-scope
+git clone https://github.com/idswsy/evidencescope.git
+cd evidencescope
 
 # ── 1. C 端协议测试 ──────────────────────────────────
 ./proto/run_tests.sh

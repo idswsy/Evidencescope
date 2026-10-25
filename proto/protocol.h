@@ -1,6 +1,6 @@
 /**
  * @file    protocol.h
- * @brief   F103 Agent Scope 线协议定义 —— C 端唯一真相源
+ * @brief   EvidenceScope 线协议定义 —— C 端唯一真相源
  *
  * 本文件与 docs/03-protocol.md、host/crates/proto/src/lib.rs、
  * proto/tests/vectors.json 必须保持同步。改协议 = 改四处 + 一次提交。

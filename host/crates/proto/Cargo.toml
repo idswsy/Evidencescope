@@ -1,6 +1,6 @@
 [package]
 name        = "scope-proto"
-description = "F103 Agent Scope 线协议 —— Rust 端实现，与 proto/protocol.{h,c} 逐字节等价"
+description = "EvidenceScope 线协议 —— Rust 端实现，与 proto/protocol.{h,c} 逐字节等价"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
