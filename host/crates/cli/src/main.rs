@@ -656,6 +656,11 @@ fn measurement_text(
         for line in scope_core::analysis::transient_tie_lines(ca) {
             let _ = writeln!(out, "    {line}");
         }
+        // 可信度行 —— 与证据包 / GUI 同一份文本（verdict_line），CLI 不另写措辞。
+        // 缺这一行的裸数出口曾让 Agent 可以引用无判决护栏的数字（F8）。
+        if let Some(v) = scope_core::analysis::verdict_line(&ca.quality) {
+            let _ = writeln!(out, "    {v}");
+        }
     }
     out
 }
@@ -1455,6 +1460,33 @@ mod tests {
         assert!(
             text.contains("TIE: 测不出（边沿太少）"),
             "step_ring 的 TIE 必须写明原因，而不是静默省略：\n{text}"
+        );
+    }
+
+    /// F8：CLI 测量行必须带可信度判决（与证据包 / GUI 同一份 verdict_line）。
+    ///
+    /// 回归：测量行此前是裸数 —— F7 修掉的伪值（`fall_ns` ≈ 平台宽度）在 CLI
+    /// 上没有任何判决护栏，Agent 可以把「下界: 下降时间≥933.3 ns」当真值引用。
+    #[test]
+    fn measurement_text_carries_the_verdict_line() {
+        let cap = sim_capture(Scenario::StepRing, 1024);
+        let text = measurement_text(
+            &cap,
+            &ScaleSet::uncalibrated(1),
+            &[0],
+            "sim(step_ring)",
+            true,
+        );
+        // verdict_line 的分组措辞：至少要出现「可信」或「拒答」之一 ——
+        // 空白判决（什么都没说）才算失败。
+        assert!(
+            text.contains("可信（精确）: ") || text.contains("可信: ") || text.contains("拒答（"),
+            "测量文本必须带可信度判决行：\n{text}"
+        );
+        // F7 的护栏：平台电平落地后，fall 不再是「平台宽度」级的伪值
+        assert!(
+            !text.contains("下降时间=972749"),
+            "step_ring 的 fall_ns 不应再是全局极值门限下的伪值：\n{text}"
         );
     }
 
