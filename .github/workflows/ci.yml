@@ -489,11 +489,14 @@ jobs:
           fi
           echo "✓ 工具名清单一致（说明文字仍需人工同步）"
 
-      # README 的「模拟器场景（15 个）」表是 Scenario::name 的**人读镜像** ——
+      # README 的「模拟器场景（N 个）」表是 Scenario::name 的**人读镜像** ——
       # 加场景时最容易漏的就是它（代码有三处编译期/测试期强制点，文档一处
       # 都没有）。与上面那条同一个道理：镜像会腐烂，让 CI 盯着。
       #
       # **顺序也查**：README 表里故意按 ALL 的顺序排，diff 不做排序比较。
+      #
+      # 条数不写死：这里曾写死 `-eq 15`，场景加到 18 后连红 24 个提交才被
+      # 发现（#22–#45）。现在改为抽出 README 表头括号里的数字与实现比对。
       - name: 检查模拟器场景表与实现一致
         working-directory: .
         run: |
@@ -506,6 +509,10 @@ jobs:
             echo "::error::README.md 的模拟器场景表与 Scenario::name 不一致（含顺序）"
             exit 1
           fi
-          test "$(wc -l < /tmp/impl_scen.txt)" -eq 15 \
-            || { echo "::error::场景数不是 15 —— 表头写的数字也要改"; exit 1; }
-          echo "✓ 场景表一致（15 个，顺序与 ALL 相同）"
+          n_impl=$(wc -l < /tmp/impl_scen.txt)
+          n_head=$(grep -oP '模拟器场景（\K[0-9]+' README.md | head -1)
+          if [ "$n_head" != "$n_impl" ]; then
+            echo "::error::README 表头写的是 ${n_head:-（缺失）} 个场景，实现是 $n_impl 个"
+            exit 1
+          fi
+          echo "✓ 场景表一致（$n_impl 个）"
