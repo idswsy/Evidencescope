@@ -1490,6 +1490,34 @@ mod tests {
         );
     }
 
+    /// ring_alias 的混叠拒答必须在 CLI 的判决行上可见（§2.5 维护项专项断言）。
+    ///
+    /// 回归：混叠拒答此前只被 sim 层测试
+    /// （`waveform.rs::ring_alias_is_refused_as_aliased`）与证据包 / MCP 覆盖
+    /// —— CLI 的测量文本里没有专门断言，判决行丢掉这一组不会被抓到。
+    #[test]
+    fn measurement_text_refuses_ring_frequency_as_aliased_for_ring_alias() {
+        let cap = sim_capture(Scenario::RingAlias, 1024);
+        let text = measurement_text(
+            &cap,
+            &ScaleSet::uncalibrated(1),
+            &[0],
+            "sim(ring_alias)",
+            true,
+        );
+        // 半周期不足 2 样点：振铃频率必须以「采样密度不足」（Aliased）拒答，
+        // 不出数值。
+        assert!(
+            text.contains("拒答（采样密度不足）: 振铃频率"),
+            "ring_alias 的振铃频率必须以 Aliased 拒答出现在判决行：\n{text}"
+        );
+        // 频率行必须是显式拒答，而不是 0 或任何数字读数。
+        assert!(
+            text.contains("频率=测不出（无明显周期）"),
+            "ring_alias 的频率行必须是显式拒答：\n{text}"
+        );
+    }
+
     fn sim_capture(scenario: Scenario, n: usize) -> Capture {
         let rate = 857_142;
         let ch_count = scenario.channel_count();
