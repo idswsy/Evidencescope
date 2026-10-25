@@ -1,6 +1,6 @@
 [package]
 name        = "scope-cli"
-description = "命令行上位机：调试、抓波形、跑模拟器"
+description = "命令行上位机：调试、采集波形、跑模拟器"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
