@@ -456,7 +456,9 @@ jobs:
         run: |
           cargo run -q -p scope-cli -- sim capture --scenario i2c_100k -n 2048 -o /tmp/i2c.csv
           test -s /tmp/i2c.csv || { echo "::error::I2C CSV 为空"; exit 1; }
-          head -1 /tmp/i2c.csv | grep -q 'CH2V' || { echo "::error::应为双通道"; exit 1; }
+          # 列头在第 2 行 —— 第 1 行是 G2b 引入的 `# rate_hz=` 速率注释
+          # （步骤 1 适配了这一点，本步骤当时漏改，连红至 2026-10-25 才发现）
+          sed -n '2p' /tmp/i2c.csv | grep -q 'CH2V' || { echo "::error::应为双通道"; exit 1; }
           echo "✓ I2C 双通道采集成功"
 
       - name: CLI 测量命令
