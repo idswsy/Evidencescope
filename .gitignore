@@ -28,6 +28,8 @@
 *.scvd
 JLinkLog.txt
 JLinkSettings.ini
+# 构建日志一律为过程产物，不入库（build_check.log 曾随 186771a 误提交，已移除）
+*.log
 # ⚠ 必须写成 `**/`：含斜杠的模式会**锚定到仓库根**，`MDK-ARM/*/` 匹配不到
 # `firmware/MDK-ARM/*/` —— 34 MB 的 Keil 构建产物会因此被提交。
 **/MDK-ARM/*/
