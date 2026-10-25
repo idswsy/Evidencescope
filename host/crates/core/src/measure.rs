@@ -204,6 +204,24 @@ pub fn measure(cap: &Capture, ch: usize, scale: &ChannelScale) -> Option<Measure
         (None, None)
     };
 
+    // ── 边沿时间的门限：双电平用平台电平，非双电平用全局极值 ──
+    //
+    // t10/t90 取全局 min/max 时，过冲/下冲 ≥ 约 10% pp 的波形会把 90% 线抬进
+    // 过冲峰、10% 线压进下冲谷：`step_ring`（过冲 30.8%）实测 fall_ns =
+    // 972 749.8 ns —— 那是平台宽度，不是边沿时间，且 rise 恒 None
+    // （docs/11 §10.3 F7 裁决）。IEEE 181 的 10%/90% 参考本就是**稳态电平**；
+    // 双电平判定的 vlo/vhi 恰是平台中心（过冲/下冲是少数派样点，不挪动
+    // 桶中心）。非双电平（正弦/噪声/调幅）没有平台可言，维持全局极值与
+    // 既有拒答路径。
+    let (edge_lo, edge_hi) = if levels.is_two_level() && levels.sep_lsb > 0.0 {
+        (
+            levels.vlo_lsb.round().clamp(0.0, 4095.0) as u16,
+            levels.vhi_lsb.round().clamp(0.0, 4095.0) as u16,
+        )
+    } else {
+        (lo, hi)
+    };
+
     Some(Measurements {
         vpp: magnitude(sum.pp_lsb as f64),
         min: level(lo as f64),
@@ -213,8 +231,8 @@ pub fn measure(cap: &Capture, ch: usize, scale: &ChannelScale) -> Option<Measure
         rms: magnitude(sum.rms_lsb),
         freq_hz,
         duty_pct: duty_pct.flatten(),
-        rise_ns: transition_ns(s, cap.rate_hz, lo, hi, EdgeDir::Rising, window),
-        fall_ns: transition_ns(s, cap.rate_hz, lo, hi, EdgeDir::Falling, window),
+        rise_ns: transition_ns(s, cap.rate_hz, edge_lo, edge_hi, EdgeDir::Rising, window),
+        fall_ns: transition_ns(s, cap.rate_hz, edge_lo, edge_hi, EdgeDir::Falling, window),
         overshoot_pct,
         undershoot_pct,
         high_ns: high_time_ns(s, cap.rate_hz, mid, period),
