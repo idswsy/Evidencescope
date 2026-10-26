@@ -464,16 +464,60 @@ fn decode_uart(cap: &Capture, ch: usize, cfg: &UartConfig) -> Result<DecodedFram
         return Err(DecodeError::NoSignal);
     }
     let mid = (lo as f64 + hi as f64) / 2.0;
-    let high = |i: usize| s[i] as f64 > mid;
 
-    // 起始位候选：所有下降沿；sample 0 为低时补一个 0（采集窗可从起始位开始）。
-    // 毛刺滤波：与前一候选间隔 < 0.5 位的丢弃前者（判为毛刺，docs/12 §3.3）。
+    // ── 极性：双遍试探，以停止位通过率裁决 ──
+    //
+    // 真机前端 `(5−Vin)/2` 会把 UART **反相**（G4 首日实测：idle 落在低电平
+    // 882，数据位高在 1972），而模拟器场景是同相的 —— 不问极性就会把反相流
+    // 解成「帧同步对、字节全错 + 停止位失败」的乱码。
+    //
+    // 曾试过「多数样点所在电平即空闲」的单次判定：在 55 0F A5 这类 mark ≈ 50%
+    // 的图样上**不可靠** —— 窗位一偏多数就翻转（恰是「全 0 数据」反例的近亲）。
+    // 改为两种极性各解一遍，**帧结构本身当裁判**：正确极性下停止位几乎全过，
+    // 反相时大半失败。平局取同相（标准 UART 的缺省假设）。已知的真歧义只有
+    // 极长全 0 数据流——那种信号对任何极性判据都解不通，属线路级问题。
+    let normal = decode_uart_pass(s, t, mid, cfg, cap, false);
+    let flipped = decode_uart_pass(s, t, mid, cfg, cap, true);
+    let chosen = if flipped.quality.frame_ok > normal.quality.frame_ok {
+        flipped
+    } else {
+        normal
+    };
+    if chosen.frames.is_empty() {
+        return Err(DecodeError::NoSignal);
+    }
+    Ok(chosen)
+}
+
+/// 单极性解码一遍。`inverted = true` 时所有「高」取反 —— 真机前端
+/// `(5−Vin)/2` 反相 UART 之后，归一化视角仍满足「idle 高、起始位低」，
+/// 下游帧逻辑与同相流共用同一份。
+fn decode_uart_pass(
+    s: &[u16],
+    t: f64,
+    mid: f64,
+    cfg: &UartConfig,
+    cap: &Capture,
+    inverted: bool,
+) -> DecodedFrames {
+    let high = |i: usize| {
+        let raw = s[i] as f64 > mid;
+        if inverted {
+            !raw
+        } else {
+            raw
+        }
+    };
+
+    // 起始位候选：所有下降沿（归一化视角）；sample 0 已在起始位电平时补一个
+    // 0（采集窗可从起始位开始）。毛刺滤波：与前一候选间隔 < 0.5 位的丢弃
+    // 前者（判为毛刺，docs/12 §3.3）。
     let mut starts: Vec<usize> = Vec::new();
-    if cfg.start_bit_low && s[0] as f64 <= mid {
+    if cfg.start_bit_low && !high(0) {
         starts.push(0);
     }
     for i in 1..s.len() {
-        if s[i - 1] as f64 > mid && s[i] as f64 <= mid {
+        if high(i - 1) && !high(i) {
             if let Some(&last) = starts.last() {
                 if ((i - last) as f64) < 0.5 * t && last != 0 {
                     starts.pop(); // 前一个是毛刺
@@ -481,9 +525,6 @@ fn decode_uart(cap: &Capture, ch: usize, cfg: &UartConfig) -> Result<DecodedFram
             }
             starts.push(i);
         }
-    }
-    if starts.is_empty() {
-        return Err(DecodeError::NoSignal);
     }
 
     let n = s.len();
@@ -498,7 +539,12 @@ fn decode_uart(cap: &Capture, ch: usize, cfg: &UartConfig) -> Result<DecodedFram
     };
 
     let mut frames: Vec<Frame> = Vec::new();
-    let mut errors = 0usize;
+    // `frame_ok = frames.len() - stop_fails`：stop_fails 只数真正落成帧的
+    // 停止位失败，因此结构上不可下溢。曾用单一 `errors` 混装两种口径再相减
+    // —— 「0.5T 校验否决的候选」与「停止位失败」——G4 真机的反相流里候选
+    // 否决数超过帧数，usize 下溢直接 panic（sim 合成数据候选全过，永不可见）。
+    // 语义定界：被否决的候选只是「猜错了边沿」，不是帧，不进任何计数。
+    let mut stop_fails = 0usize;
     let mut truncated = false;
     let mut idx = 0usize;
 
@@ -513,8 +559,7 @@ fn decode_uart(cap: &Capture, ch: usize, cfg: &UartConfig) -> Result<DecodedFram
                 break;
             }
             Some(p) if high(p) => {
-                // 候选不是起始位（数据位内的下降沿）—— 下一候选。
-                errors += 1;
+                // 候选不是起始位（数据位内的下降沿）—— 不是帧，直接跳过。
                 idx += 1;
                 continue;
             }
@@ -558,7 +603,7 @@ fn decode_uart(cap: &Capture, ch: usize, cfg: &UartConfig) -> Result<DecodedFram
             Some(p) => high(p),
         };
         if !ok {
-            errors += 1;
+            stop_fails += 1;
         }
         frames.push(Frame::Uart(UartFrame {
             index: frames.len() + 1,
@@ -596,14 +641,14 @@ fn decode_uart(cap: &Capture, ch: usize, cfg: &UartConfig) -> Result<DecodedFram
     }
 
     let mut warnings = Vec::new();
-    if errors > 0 {
-        warnings.push(DecodeWarning::FrameError { count: errors });
+    if stop_fails > 0 {
+        warnings.push(DecodeWarning::FrameError { count: stop_fails });
     }
     if truncated {
         warnings.push(DecodeWarning::Truncated);
     }
-    let frame_ok = frames.len() - errors;
-    Ok(DecodedFrames {
+    let frame_ok = frames.len() - stop_fails;
+    DecodedFrames {
         protocol: Protocol::Uart,
         rate_hz: cap.rate_hz,
         frames,
@@ -611,9 +656,9 @@ fn decode_uart(cap: &Capture, ch: usize, cfg: &UartConfig) -> Result<DecodedFram
         quality: DecodeQuality {
             sample_margin: Some(t),
             frame_ok,
-            frame_errors: errors,
+            frame_errors: stop_fails,
         },
-    })
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -692,6 +737,55 @@ mod tests {
         assert_eq!(&bytes[..12], &want[..], "字节序列应循环真值");
         assert_eq!(bytes[45], 0x55);
         assert_eq!(out.quality.sample_margin, Some(RATE as f64 / 115_200.0));
+    }
+
+    /// G4：真机前端 `(5−Vin)/2` 把 UART **反相**（idle 落在低电平）——
+    /// 极性自检后必须解出与同相流完全一致的字节序列。
+    #[test]
+    fn uart_decodes_inverted_polarity() {
+        let s: Vec<u16> = uart_wave(&BYTES, 115_200, RATE, 4096, 2)
+            .into_iter()
+            .map(|v| if v >= 2048 { 1000 } else { 3000 })
+            .collect();
+        let cap = uart_cap(s, RATE);
+        let out = decode(&cap, &uart_req(115_200)).expect("反相流也应能解码");
+        assert_eq!(
+            out.quality.frame_errors, 0,
+            "极性自检后停止位应全部通过：{:?}",
+            out.warnings
+        );
+        let bytes = out.uart_bytes().expect("应有字节序列");
+        let want: Vec<u8> = (0..12).map(|i| BYTES[i % 3]).collect();
+        assert_eq!(&bytes[..12], &want[..], "反相流的字节序列应与真值一致");
+    }
+
+    /// G4 真机流还炸出过一个 usize 下溢：反相流里「候选否决」（0.5T 校验
+    /// 失败的下降沿）可以多于帧数，旧的 `frames.len() - errors` 直接 panic。
+    /// 构造：反相流 + 每 20 样点注入 2 样点毛刺（每个毛刺产生一个被否决的
+    /// 候选）。修复后不得 panic，且质量计数满足守恒。
+    #[test]
+    fn inverted_stream_with_glitches_does_not_underflow() {
+        let mut s: Vec<u16> = uart_wave(&BYTES, 115_200, RATE, 4096, 2)
+            .into_iter()
+            .map(|v| if v >= 2048 { 1000 } else { 3000 })
+            .collect();
+        // 反相流的 idle 在低电平（1000，归一化后是「高」）；把毛刺打到高
+        // 电平（3000，归一化后是「低」）—— 每个毛刺都是一个会被 0.5T 校验
+        // 否决的起始位候选。
+        for chunk in s.chunks_mut(20) {
+            if chunk.len() >= 2 {
+                chunk[0] = 3000;
+                chunk[1] = 3000;
+            }
+        }
+        let cap = uart_cap(s, RATE);
+        let out = decode(&cap, &uart_req(115_200)).expect("毛刺流也应完成解码而非 panic");
+        // 质量守恒：frame_ok + frame_errors == 帧数（候选否决只进告警口径）
+        assert_eq!(
+            out.quality.frame_ok + out.quality.frame_errors,
+            out.frame_count(),
+            "帧质量计数必须守恒"
+        );
     }
 
     /// B2：波特率偏 ±10% —— 字节序列不得等于真值，字节错误率必须过半，
