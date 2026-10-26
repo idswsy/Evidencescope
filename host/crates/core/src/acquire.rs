@@ -239,8 +239,17 @@ pub fn acquire_cancellable<P: DevicePort>(
     let a_dec = if a_dec == 0 { 1 } else { a_dec };
 
     let pre = (params.samples / 2).min(2048);
-    bus.set_trigger(t_mode, t_src, t_edge, params.trigger_level_lsb, pre, 1000)?;
+    // ⚠ **SET_ACQ 必须先于 SET_TRIGGER** —— 真机固件的 `acq_set_trigger`
+    // （`firmware/App/acq.c:103`）以**当前** capture_samples 校验
+    // `pre_samples > capture_samples`。从前的顺序（trigger → acq）在
+    // 「上一轮采集窗比本轮小」时必然 BadParam("bad trigger")：G4 首日真机
+    // 实测，-n 1024 之后的每一次采集都被拒，而模拟器当时没有这条校验，
+    // 问题在 sim 上永不可见（docs/02 §9 实板必测的意义所在）。
+    // 先 SET_ACQ 把窗口设到位，pre 的校验对象就是本轮自己的窗口。
+    // 触发三参数（mode/src/edge）不在 SET_ACQ 的改动范围内，沿用例值
+    // 在哪个顺序下读都一样。
     bus.set_acq(a_mode, params.samples, a_fmt, a_dec)?;
+    bus.set_trigger(t_mode, t_src, t_edge, params.trigger_level_lsb, pre, 1000)?;
 
     bus.arm()?;
 

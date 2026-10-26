@@ -637,11 +637,24 @@ impl SimDevice {
             self.queue_error(seq, Cmd::SetTrigger as u16, 0x0002, "bad len");
             return;
         }
+        // 与真机 `acq_set_trigger`（firmware/App/acq.c:93）逐条对齐 ——
+        // 模拟器少一条校验，主机侧的违例就只在真机上炸（G4 首日实测教训：
+        // pre_samples 超过当前采集窗，真机 BadParam 而 sim 放行）。
+        if self.state == State::Armed {
+            self.queue_error(seq, Cmd::SetTrigger as u16, 0x0004, "armed");
+            return;
+        }
+        let level_lsb = u16::from_le_bytes([payload[3], payload[4]]);
+        let pre_samples = u16::from_le_bytes([payload[5], payload[6]]);
+        if level_lsb > 4095 || pre_samples > self.cfg.capture_samples {
+            self.queue_error(seq, Cmd::SetTrigger as u16, 0x0003, "bad trigger");
+            return;
+        }
         self.cfg.trigger_mode = payload[0];
         self.cfg.trigger_source = payload[1];
         self.cfg.trigger_edge = payload[2];
-        self.cfg.trigger_level_lsb = u16::from_le_bytes([payload[3], payload[4]]);
-        self.cfg.pre_samples = u16::from_le_bytes([payload[5], payload[6]]);
+        self.cfg.trigger_level_lsb = level_lsb;
+        self.cfg.pre_samples = pre_samples;
         self.cfg.holdoff_us = u32::from_le_bytes([payload[7], payload[8], payload[9], payload[10]]);
         self.queue(flags::RESP, seq, Cmd::SetTrigger, payload.to_vec());
     }
@@ -1174,5 +1187,53 @@ mod caps_tests {
         ] {
             assert_ne!(dev.caps() & bit, 0, "IdealSim 应保留模拟器完整能力");
         }
+    }
+}
+
+#[cfg(test)]
+mod g4_divergence_tests {
+    //! G4 真机首日（2026-10-25）抓到的 sim/真机分歧的回归钉：
+    //! 真机 `acq_set_trigger` 以**当前** capture_samples 校验
+    //! `pre_samples > capture_samples`（acq.c:103），主机却先发 SET_TRIGGER
+    //! 后发 SET_ACQ —— 「小窗采集之后接大窗采集」在真机必然 BadParam，
+    //! 而当时的 sim 没有这条校验，永不失败。修法两条各钉一个测试：
+    //! 主机调序（core/acquire.rs），模拟器补同款校验（本文件 cmd_set_trigger）。
+
+    use super::SimDevice;
+    use crate::waveform::Scenario;
+    use scope_core::{AcquireParams, CommandBus};
+    use std::time::Duration;
+
+    fn params(samples: u16) -> AcquireParams {
+        AcquireParams {
+            samples,
+            rate_hz: 857_142,
+            trigger_level_lsb: 2048,
+            timeout: Duration::from_millis(1500),
+        }
+    }
+
+    #[test]
+    fn acquire_growing_the_window_after_a_small_capture_succeeds() {
+        let dev = SimDevice::new(Scenario::Sine1k3v3);
+        let mut bus = CommandBus::new(dev);
+        scope_core::acquire(&mut bus, &params(1024)).expect("小窗采集应成功");
+        // 修前的顺序在这里必然 BadParam：pre=2048 > 上一轮留下的 capture_samples=1024
+        scope_core::acquire(&mut bus, &params(4096))
+            .expect("窗口变大后的采集不得被 pre_samples 校验拒绝");
+    }
+
+    #[test]
+    fn set_trigger_with_pre_over_the_window_is_rejected_like_the_firmware() {
+        let dev = SimDevice::new(Scenario::Sine1k3v3);
+        let mut bus = CommandBus::new(dev);
+        scope_core::acquire(&mut bus, &params(1024)).expect("小窗采集应成功");
+        let err = bus
+            .set_trigger(0, 0, 1, 2048, 2048, 1000)
+            .expect_err("pre 超窗必须像真机一样拒绝");
+        assert!(
+            format!("{err}").contains("bad trigger"),
+            "错误要来自 pre_samples 校验，而不是别的：{err}"
+        );
     }
 }
