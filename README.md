@@ -253,7 +253,9 @@ I2C / UART；双泳道 + 色标 + 交易表 + 信号质量 + 导出解码结果�
 ```
 
 串口默认参数 921600 8N1。固件侧编译状态、栈预算与烧录接线见
-[firmware/README.md](firmware/README.md)；真机采集尚未验证。
+[firmware/README.md](firmware/README.md)。真机状态（2026-10-27）：采集链路与
+UART 解码已实测成立（48 帧 / frame_errors = 0，见 [docs/13](docs/13-phase-summary.md)
+§5.1）；I2C 解码待 ADR-010（第二路 ADC）后验证。
 接线细节另见 [docs/02-hardware.md](docs/02-hardware.md) §3。
 
 ### 5.4 接入 AI Agent
@@ -366,7 +368,7 @@ GUI 按交接快照自动重连设备；运行期间可「终止」；设备收�
 | 阶段 | 目标 | 状态 | 验收标准 |
 |---|---|---|---|
 | P0 | 协议闭环（无硬件） | 完成 | 黄金向量在 C 与 Rust 两端全绿；`sim` 可完成 capture |
-| P1 | 最简硬件闭环 | 固件侧可编译（252 项 PC 断言，0 Error / 0 Warning）；**真机采集未验证** | F103 采 2048 点 → 串口 → CLI 写入 CSV → 绘图 |
+| P1 | 最简硬件闭环 | 固件侧可编译（252 项 PC 断言，0 Error / 0 Warning）；真机采集已实测（921600 链路 / 857 142 Hz / CSV 契约） | F103 采 2048 点 → 串口 → CLI 写入 CSV → 绘图 |
 | P2 | 数字通路 I2C 解码 | 进行中：主机侧完成；**固件侧未开始**（`App/i2c_decode.c` 与边沿时间戳缓冲均未创建） | 100 kHz / 400 kHz / 1 MHz 实总线解码结果与逻辑分析仪一致 |
 | P3 | MCP + Agent | 完成，见 [docs/08](docs/08-agent-walkthrough.md) | Agent 单条指令完成「采集一次 I2C 写时序并说明 NACK 原因」 |
 | P4 | 增强 | 进行中：GUI（UART 解码、瞬态与 TIE、CSV 导出）、历史、AI 分析面板已完成；板载屏幕已**冻结**（`display.c` 移出 Keil 工程，代码保留，见 [docs/09](docs/09-realtime-display.md) §4.4）；改板与自动量程未做 | 双通道改板、自动量程、等效时间采样 |
