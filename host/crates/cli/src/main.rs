@@ -1299,8 +1299,14 @@ fn capture_once_with_trigger<D: DevicePort>(
     bus.connect()?;
 
     if let Some((mode, edge)) = trigger {
-        let pre = (samples / 2).min(2048);
-        bus.set_trigger(mode, 0, edge, level, pre, 1000)?;
+        // ⚠ 这里只改 mode/edge，pre 用 **0 占位** —— 真机以**当前**
+        // capture_samples 校验 `pre_samples > capture_samples`（acq.c:103），
+        // 而此刻设备上的窗口还是上一轮采集留下的值（跨进程也成立），
+        // 任何按本轮 samples 算出的 pre 都可能超窗被拒：G4 首日实测，
+        // `-n 1024` 采集之后每一次 `decode --protocol uart` 都 BadParam。
+        // acquire() 随后的 SET_ACQ + SET_TRIGGER 会用本轮正确的 pre 重发，
+        // 这个占位值不参与任何一次 ARM。
+        bus.set_trigger(mode, 0, edge, level, 0, 1000)?;
     }
 
     // 采集编排在 core 里（`scope_core::acquire`）—— EVENT_TRIGGER 的 18 字节解析、
