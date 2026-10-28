@@ -5,9 +5,11 @@
 //!
 //! # 三个容易算错的地方（都踩过）
 //!
-//! 1. **幅值与电平的换算不一样**。峰峰值 / RMS 是**幅值**，只乘 V/LSB；
-//!    最小值 / 最大值 / 均值是**电平**，要先减零点再乘。混用会让
-//!    2.31 V 的峰峰值显示成 0.66 V（甚至把 RMS 算成负数）。
+//! 1. **幅值与电平的换算不一样**。峰峰值 / AC-RMS 是**参考无关的幅值**，
+//!    只乘 V/LSB；最小值 / 最大值 / 均值是**电平**，要先减零点再乘。混用会让
+//!    2.31 V 的峰峰值显示成 0.66 V（甚至把 AC-RMS 算成负数）。
+//!    真 RMS 是**绕 0 V 的幅值** —— 而 0 V 由 `zero_lsb` 定义，所以它要在
+//!    LSB 域先平移零点、再乘 V/LSB，见 `rms_volts` 处的推导。
 //! 2. **频率不能用「边沿数 ÷ 总时长」**。I2C 在两次事务之间 SCL 保持高电平，
 //!    那段时间没有边沿却占着时长 —— 100 kHz 会被算成 87 kHz。
 //! 3. **周期估计要「先筛后平均」**。用中位数筛掉空闲段，再对保留下来的间隔
@@ -87,14 +89,26 @@ pub fn measure(cap: &Capture, ch: usize, scale: &ChannelScale) -> Option<Measure
     let sum = cap.summary(ch)?;
     let s = cap.samples(ch)?;
 
-    // ⚠ 两种换算不能混：
+    // ⚠ 三种换算不能混：
     //   电平（min/max/mean）→ 减零点再乘 V/LSB
-    //   幅值（Vpp/RMS/AC-RMS）→ **只乘 V/LSB**，减零点会把幅值算成电平
-    // 回归：这里曾经一律用 lsb_to_volts，于是 Vpp 2.31 V 被报成 0.66 V，
+    //   参考无关幅值（Vpp / AC-RMS）→ **只乘 V/LSB**，减零点会把幅值算成电平
+    //   真 RMS → 绕 **0 V**，而 0 V 由 `zero_lsb` 定义：先在 LSB 域平移，再乘
+    // 回归①：这里曾经一律用 lsb_to_volts，于是 Vpp 2.31 V 被报成 0.66 V，
     // 而 AC-RMS 直接变成了负数。
+    // 回归②（2026-10-27 真机标定暴露）：真 RMS 也照「只乘 V/LSB」处理，绕
+    // LSB 0 的 RMS 被当成了绕 0 V —— 标定（z=1978）后同一 PWM 波形报出
+    // RMS 5.24 V，比峰值 |V| = 3.34 V 还大，数学上不可能。
     let vpl = scale.volts_per_lsb;
     let level = |lsb: f64| scale.lsb_to_volts(lsb.round().clamp(0.0, 4095.0) as u16);
     let magnitude = |lsb: f64| lsb * vpl;
+    // E[(x−z)²] = E[x²] − 2z·E[x] + z²：`sum.rms_lsb` 是 E[x²] 的平方根、
+    // `sum.mean_lsb` 是 E[x]，两个量 `sum` 里都有，不必重扫样本。
+    // 直流分支同样适用：rms_lsb = mean_lsb = L 时退化为 |L−z|·vpl = |电平|。
+    let zero = scale.zero_lsb;
+    let rms_volts = vpl
+        * (sum.rms_lsb * sum.rms_lsb - 2.0 * zero * sum.mean_lsb + zero * zero)
+            .max(0.0)
+            .sqrt();
 
     let (mut lo, mut hi) = (u16::MAX, u16::MIN);
     for &v in s {
@@ -110,7 +124,7 @@ pub fn measure(cap: &Capture, ch: usize, scale: &ChannelScale) -> Option<Measure
             max: level(hi as f64),
             mean: level(sum.mean_lsb),
             ac_rms: magnitude(sum.ac_rms_lsb),
-            rms: magnitude(sum.rms_lsb),
+            rms: rms_volts,
             freq_hz: None,
             duty_pct: None,
             rise_ns: None,
@@ -228,7 +242,7 @@ pub fn measure(cap: &Capture, ch: usize, scale: &ChannelScale) -> Option<Measure
         max: level(hi as f64),
         mean: level(sum.mean_lsb),
         ac_rms: magnitude(sum.ac_rms_lsb),
-        rms: magnitude(sum.rms_lsb),
+        rms: rms_volts,
         freq_hz,
         duty_pct: duty_pct.flatten(),
         rise_ns: transition_ns(s, cap.rate_hz, edge_lo, edge_hi, EdgeDir::Rising, window),
@@ -732,5 +746,76 @@ mod tests {
         assert!(x.overshoot_pct.is_none());
         assert!(x.undershoot_pct.is_none());
         assert!(x.high_ns.is_none());
+    }
+
+    // ── 真 RMS 的零点 ────────────────────────────────────────────
+
+    /// 真机标定参数（2026-10-27 首板）：3.24 V / 1090 LSB，零点 1978。
+    /// 前端反相：LSB 888 对应真实 3.24 V，LSB 1978 对应真实 0 V。
+    fn calibrated() -> ChannelScale {
+        ChannelScale {
+            volts_per_lsb: 3.24 / 1090.0,
+            zero_lsb: 1978.0,
+        }
+    }
+
+    /// **真 RMS 绕 0 V（`zero_lsb`），不是绕 LSB 0。**
+    ///
+    /// 25%/75% 双电平（LSB 888/1978，8 个整周期）：电压电平 −3.24 V（25%）
+    /// 与 0 V（75%），解析值 RMS = √0.25 × 3.24 = 1.62 V，且必须满足
+    /// RMS² = mean² + AC-RMS²（真 RMS 含直流、AC-RMS 是标准差，自洽恒等式）。
+    ///
+    /// 变异：`rms` 退回 `rms_lsb·vpl`（绕 LSB 0）—— 本条红（报 5.25 V）。
+    /// 回归②：2026-10-27 真机上该变异体实测报 5.24 V > 峰值 3.34 V。
+    #[test]
+    fn true_rms_is_referenced_to_zero_volts_not_lsb_zero() {
+        let scale = calibrated();
+        let mut s = Vec::new();
+        for _ in 0..8 {
+            s.resize(s.len() + 256, 888); // 真实 3.24 V，占 25%
+            s.resize(s.len() + 768, 1978); // 真实 0 V，占 75%
+        }
+        let x = measure(&cap_of(s, RATE), 0, &scale).expect("双电平必须测得出");
+
+        let v_hi = (888.0 - 1978.0) * scale.volts_per_lsb; // −3.24 V
+        assert!(
+            (x.rms - 0.5 * v_hi.abs()).abs() < 1e-9,
+            "RMS 实测 {}，应为 1.62 V",
+            x.rms
+        );
+        let lhs = x.rms * x.rms;
+        let rhs = x.mean * x.mean + x.ac_rms * x.ac_rms;
+        // 恒等式在连续域精确成立，但 `mean` 走 `level` 的 u16 往返被量化到
+        // 整 LSB（±0.5 LSB ≈ ±1.5 mV），容差下界 2·|mean|·0.5·vpl ≈ 0.0024；
+        // 变异体（绕 LSB 0）的偏差是 ~25，仍被远远击穿。
+        assert!(
+            (lhs - rhs).abs() < 0.005,
+            "RMS²={lhs} ≠ mean²+AC-RMS²={rhs} —— 换算不自洽"
+        );
+    }
+
+    /// **直流线的 RMS = |电平|**（绕 0 V）。
+    ///
+    /// 全 1978 LSB + zero_lsb=1978 → 真实 0 V → RMS 必须是 0。
+    /// 变异：退回 `rms_lsb·vpl` —— 0 V 的线报 5.88 V，本条红。
+    #[test]
+    fn dc_line_rms_equals_its_absolute_level() {
+        let scale = calibrated();
+        let zero_v = measure(&cap_of(vec![1978; 256], RATE), 0, &scale).expect("测得出");
+        assert!(
+            zero_v.rms.abs() < 1e-12,
+            "0 V 直流的 RMS 实测 {}",
+            zero_v.rms
+        );
+        assert!(zero_v.mean.abs() < 1e-12);
+
+        let level_v = measure(&cap_of(vec![888; 256], RATE), 0, &scale).expect("测得出");
+        assert!(
+            (level_v.rms - 3.24).abs() < 1e-9,
+            "RMS 实测 {}，应为 3.24 V",
+            level_v.rms
+        );
+        assert!((level_v.mean - (-3.24)).abs() < 1e-9);
+        assert!((level_v.rms - level_v.mean.abs()).abs() < 1e-9);
     }
 }
