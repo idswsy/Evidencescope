@@ -31,9 +31,11 @@ static void apply(void)
 
 void LocalGen_Init(void)
 {
-    /* 上电默认：1 kHz、50%、**关**。与上游 `Init_Oscilloscope` 的
-     * `outputFreq=1000 / pwmOut=500 / ouptputbit=0` 一致。 */
-    s_duty = 500u;
+    /* 上电默认：1 kHz、25%、**关**。
+     * 与上游 `Init_Oscilloscope` 的 `pwmOut=500`（50%）不同：真机验证需要
+     * 一个非半占空的波形，让「占空比测量」能和「100−duty 的反向误判」
+     * 区分开（见 sim/waveform.rs 的变异体注释）。频率仍与上游一致为 1 kHz。 */
+    s_duty = 250u;
     s_enabled = false;
 
     s_arr = GEN_TICK_HZ / 1000u;   /* 1 kHz */
