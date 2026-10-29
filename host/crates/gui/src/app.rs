@@ -120,6 +120,9 @@ pub struct App {
     pub(crate) font_notice: Option<String>,
     /// 下次绘制时把图重置到全览。
     pub(crate) fit_pending: bool,
+    /// 待施加的 x 视窗钳制（上一帧视窗越出数据范围的纠正值，下一帧闭包
+    /// 开头用 `set_plot_bounds_x` 拉回）。见 [`vmodel::clamp_x_view`]。
+    pub(crate) view_clamp_x: Option<(f64, f64)>,
     /// 显示电压还是 LSB。
     pub(crate) show_volts: bool,
     /// 泳道是否重叠显示（默认分开，即示波器的 stacked 模式）。
@@ -210,6 +213,7 @@ impl App {
             log: Vec::new(),
             font_notice: font.notice(),
             fit_pending: false,
+            view_clamp_x: None,
             show_volts: true,
             lanes_overlap: false,
             simulated: false,

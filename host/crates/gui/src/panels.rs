@@ -900,6 +900,8 @@ pub fn plot(app: &mut App, ui: &mut egui::Ui) {
 
     let fit = app.fit_pending;
     app.fit_pending = false;
+    // 上一帧视窗越界的钳制值，闭包开头施加（见 show 之后的钳制检查）。
+    let pending_clamp = app.view_clamp_x.take();
 
     let mut p = Plot::new("scope")
         .x_axis_label("时间 (µs)")
@@ -930,7 +932,11 @@ pub fn plot(app: &mut App, ui: &mut egui::Ui) {
         p
     };
 
-    p.show(ui, move |pui| {
+    let resp = p.show(ui, move |pui| {
+        // 上一帧越出数据范围的视窗先拉回（纠正值来自 show 之后的钳制检查）。
+        if let Some((a, b)) = pending_clamp {
+            pui.set_plot_bounds_x(a..=b);
+        }
         // **普通滚轮 = 时间轴缩放**（示波器惯例，与上方提示「滚轮缩放」对齐）。
         //
         // egui 的 `zoom_delta` 只由 **Ctrl+滚轮** / 触控板捏合驱动（见 egui
@@ -978,6 +984,20 @@ pub fn plot(app: &mut App, ui: &mut egui::Ui) {
             pui.vline(VLine::new("触发", x).color(egui::Color32::from_rgb(255, 80, 80)));
         }
     });
+
+    // ── 视窗钳制：x 视窗不得离开数据范围 [0, total_us] ──
+    //
+    // egui_plot 的内置拖拽/缩放在用户闭包**之后**处理（其 show() 先
+    // build_fn 再 handle_interactions），闭包内钳不住同一帧的拖拽 —— 所以
+    // 读**本帧最终 bounds**，越界就把纠正值交给下一帧的闭包开头
+    // （vmodel::clamp_x_view：平移越界保宽度，缩出数据范围钳成全览）。
+    // 效果：拖到数据边界就停，缩放不会缩出 0..4778 µs 之外 —— 示波器惯例，
+    // 「波形只有采集那段长」但视窗永远看得见数据。
+    let (vx0, vx1) = resp.transform.bounds().range_x().into_inner();
+    if let Some((a, b)) = vmodel::clamp_x_view(vx0, vx1, 0.0, total_us) {
+        app.view_clamp_x = Some((a, b));
+    }
+
     // 色标**不在这里**画 —— `Plot::show` 会占用全部可用高度，
     // 其后的行会被压缩为零高度，仅显示一行残影。
     // 唯一的那份在下面 `decode_panel` 里。

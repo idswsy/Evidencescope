@@ -210,6 +210,40 @@ pub fn suggest_span_us(cap: &Capture) -> f64 {
     (period_us * 4.6).max(total / 20.0).min(total)
 }
 
+/// 视窗钳制：把 x 视窗拉回数据范围 `[lo, hi]` 内。
+///
+/// 返回 `None` 表示视窗本就在范围内，无需纠正；`Some((a, b))` 是纠正后
+/// 的范围，由调用方在下一帧用 `PlotUi::set_plot_bounds_x` 施加。
+///
+/// # 为什么只能在 show 之后做
+///
+/// egui_plot 的内置拖拽/缩放在用户闭包**之后**处理（其 `show()` 先
+/// `build_fn` 再 `handle_interactions`），闭包内的钳制会被同一帧的拖拽
+/// 覆盖。所以只能「读本帧最终 bounds → 越界就记下来 → 下一帧闭包开头
+/// 拉回」。拖拽到边界时约有 ≤ 一帧的回弹（几像素），静止后立即贴合。
+///
+/// # 规则（示波器惯例）
+///
+/// - 平移越界 → **保宽度平移**回界内（拖动不改变缩放档位）；视窗整个落在
+///   数据外也贴到最近的数据边界，同样保宽度；
+/// - 缩得比数据范围还小 → 钳成完整 `[lo, hi]`（最远只能「缩」到全览）。
+pub fn clamp_x_view(x0: f64, x1: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
+    if x0 >= x1 || lo >= hi {
+        return None; // 退化输入（空视窗/空数据）不钳
+    }
+    let w = x1 - x0;
+    let span = hi - lo;
+    if w >= span {
+        let full = (x0 - lo).abs() < f64::EPSILON && (x1 - hi).abs() < f64::EPSILON;
+        return (!full).then_some((lo, hi));
+    }
+    match (x0 < lo, x1 > hi) {
+        (true, _) => Some((lo, lo + w)), // 左越界：贴左缘，宽度不变
+        (_, true) => Some((hi - w, hi)), // 右越界：贴右缘，宽度不变
+        _ => None,                       // 在范围内
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,5 +553,61 @@ mod tests {
         // 界面帧表（与证据包同一份文本）里应出现首字节的行
         let text = d.uart_body_text();
         assert!(text.contains("0x55"), "帧表应含首字节 0x55：\n{text}");
+    }
+
+    // ── 视窗钳制 ────────────────────────────────────────────────
+
+    /// **在范围内的视窗不钳。**
+    #[test]
+    fn view_inside_data_range_is_untouched() {
+        assert_eq!(clamp_x_view(100.0, 400.0, 0.0, 4778.0), None);
+        assert_eq!(clamp_x_view(0.0, 4778.0, 0.0, 4778.0), None);
+    }
+
+    /// **平移越界保宽度**：拖到数据边界就停，缩放档位不变。
+    /// 变异：越界侧直接截断（`(x0.max(lo), x1.min(hi))`）—— 视窗变窄，
+    /// 拖一次等于偷偷缩放，这条红。
+    #[test]
+    fn panning_past_the_edge_pins_width_intact() {
+        // 左越界：视窗 [-100, 400] → 贴左缘 [0, 500]
+        assert_eq!(clamp_x_view(-100.0, 400.0, 0.0, 4778.0), Some((0.0, 500.0)));
+        // 右越界：数据 4778，视窗 [4600, 5100] → 贴右缘 [4278, 4778]
+        assert_eq!(
+            clamp_x_view(4600.0, 5100.0, 0.0, 4778.0),
+            Some((4278.0, 4778.0))
+        );
+    }
+
+    /// **缩得比数据还小 → 钳成全览**；已经是全览 → 不钳。
+    #[test]
+    fn zooming_out_wider_than_data_clamps_to_the_full_view() {
+        assert_eq!(
+            clamp_x_view(-500.0, 5300.0, 0.0, 4778.0),
+            Some((0.0, 4778.0))
+        );
+        assert_eq!(clamp_x_view(0.0, 5000.0, 0.0, 4778.0), Some((0.0, 4778.0)));
+        assert_eq!(clamp_x_view(0.0, 4778.0, 0.0, 4778.0), None);
+    }
+
+    /// **视窗完全在数据外 → 贴到最近的数据边界，宽度不变**（拖飞了也停在
+    /// 数据边上，缩放档位不被偷偷改掉）。
+    #[test]
+    fn a_view_entirely_outside_the_data_pins_to_the_nearest_edge() {
+        assert_eq!(
+            clamp_x_view(6000.0, 6800.0, 0.0, 4778.0),
+            Some((3978.0, 4778.0))
+        );
+        assert_eq!(
+            clamp_x_view(-2000.0, -1500.0, 0.0, 4778.0),
+            Some((0.0, 500.0))
+        );
+    }
+
+    /// **退化输入不钳**：空视窗 / 空数据交给上层照常渲染，不制造 NaN。
+    #[test]
+    fn degenerate_inputs_are_left_alone() {
+        assert_eq!(clamp_x_view(500.0, 500.0, 0.0, 4778.0), None);
+        assert_eq!(clamp_x_view(600.0, 500.0, 0.0, 4778.0), None);
+        assert_eq!(clamp_x_view(0.0, 100.0, 0.0, 0.0), None);
     }
 }
