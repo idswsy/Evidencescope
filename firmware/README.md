@@ -175,7 +175,7 @@ grep -rn '#include.*\(stm32\|hal_\|gd32\|HAL\)' firmware/App/ && exit 1 || exit 
 
 P1 期主力为 USART1 + 外接 CH340 模块（PA9 / PA10，四根线，TX/RX **交叉**）；
 P2 起 USB CDC（PA11 / PA12）为备选；USART2（PA2 / PA3）与底板硬冲突，禁用。
-完整表见根 [`README.md`](../README.md) §7.1 与 [`docs/02-hardware.md`](../docs/02-hardware.md) §2。
+完整表见根 [`README.md`](../README.md) §9.1 与 [`docs/02-hardware.md`](../docs/02-hardware.md) §2。
 
 > 核心板**到底有没有**板载桥、以及外接模块的最高可靠波特率，均 `【待核实】`（见 [ADR-013](../docs/06-decisions.md)）。
 > ⚠ **不要同时给核心板 Type-C 与底板 Type-C 供电** —— 双路供电倒灌，见 `docs/02-hardware.md` §9。

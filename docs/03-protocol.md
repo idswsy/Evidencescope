@@ -225,7 +225,7 @@ F103 的**硬件 CRC 单元只支持固定 CRC-32 多项式**，做不了 CCITT 
 ```
 
 > ⚠ 因此 **`GET_CONFIG` 不回 `range_idx` 与 `offset_lsb`** —— 这两个字段在设备侧
-> 只有 `SET_CHANNEL` 能写、读不回来（README §5.4.4 已把这条列为"交给 AI 采集"的已知限制）。
+> 只有 `SET_CHANNEL` 能写、读不回来（README §7.4.4 已把这条列为"交给 AI 采集"的已知限制）。
 
 **`SET_SAMPLE_RATE` 必须回显**：F103 只有 72 MHz / 定时器整数分频的量化档位，主机时间轴一律用 `actual_hz`。
 
