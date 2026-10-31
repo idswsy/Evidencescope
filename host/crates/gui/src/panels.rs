@@ -1209,9 +1209,10 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
             high,
             m.edges
         ));
-        // 第三行：质量参数 + 判决。判决文本与证据包/CLI 是同一份
-        // （core::analysis::verdict_line），界面不另写第二套措辞 ——
-        // 与 F2 在 CLI 的做法一致。
+        // 第三行：质量参数 + 判决。判决分类与证据包/CLI 是同一份逻辑
+        // （core::analysis::verdict_line_impl，单一来源）；GUI 用过滤版
+        // verdict_line_measured —— 拒答的量整组不出现（与瞬态板块同口径），
+        // 完整判决仍由证据包与 MCP 保留。
         let noise = ca
             .quality
             .noise_lsb
@@ -1223,7 +1224,7 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
             .map(|v| format!("{v:.1}"))
             .unwrap_or_else(|| "—".into());
         ui.weak(format!("      σ̂={noise} LSB  迟滞={h} LSB"));
-        if let Some(v) = scope_core::analysis::verdict_line(&ca.quality) {
+        if let Some(v) = scope_core::analysis::verdict_line_measured(&ca.quality) {
             ui.weak(format!("      {v}"));
         }
     }

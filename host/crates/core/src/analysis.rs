@@ -664,6 +664,19 @@ pub fn quantity_label(key: &str) -> Option<(&'static str, &'static str)> {
 /// 把一个通道的判决表渲染成一行文本 —— 证据包、CLI 与 GUI 共用的**唯一来源**
 /// （调用方各加自己的缩进/前缀，但措辞只有这一份）。
 pub fn verdict_line(q: &Quality) -> Option<String> {
+    verdict_line_impl(q, true)
+}
+
+/// 人读界面（GUI）用的过滤版判决行：拒答的量整组不出现。
+///
+/// 与 [`verdict_line`] 同一分类逻辑（单一来源），只去掉「拒答（…）」分组；
+/// 完整判决与原因码仍由证据包 / MCP / CLI 保留。全部量都是拒答时返回
+/// `None`，调用方整行隐藏。
+pub fn verdict_line_measured(q: &Quality) -> Option<String> {
+    verdict_line_impl(q, false)
+}
+
+fn verdict_line_impl(q: &Quality, include_refused: bool) -> Option<String> {
     if q.verdicts.is_empty() {
         return None;
     }
@@ -729,10 +742,17 @@ pub fn verdict_line(q: &Quality) -> Option<String> {
     if !bounds_above.is_empty() {
         parts.push(format!("上界: {}", bounds_above.join("、")));
     }
-    for (reason, labels) in refused {
-        parts.push(format!("拒答（{reason}）: {}", labels.join("/")));
+    if include_refused {
+        for (reason, labels) in refused {
+            parts.push(format!("拒答（{reason}）: {}", labels.join("/")));
+        }
     }
-    Some(parts.join("；"))
+    // 过滤版在没有任何可信/界内量时整行消失（全拒答），而不是输出空串。
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("；"))
+    }
 }
 
 /// 带单位的值。无量纲量的单位为空串，不留下多余空格。
@@ -1115,6 +1135,54 @@ mod tests {
         ca.tie = None;
         let lines = transient_tie_lines_measured(ca);
         assert_eq!(lines, vec!["瞬态: 振铃≤10714.3 Hz".to_string()]);
+    }
+
+    #[test]
+    fn measured_verdict_drops_only_the_refused_groups() {
+        // 过滤版判决 = Full 版去掉「拒答（…）」分组后逐字相同（同一分类逻辑）。
+        let cap = square_capture();
+        let report =
+            AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim(square)", true);
+        let q = &report.channels[0].quality;
+        let full = verdict_line(q).expect("square 的判决表非空");
+        let measured = verdict_line_measured(q).expect("square 有可信量，过滤版非空");
+        assert!(
+            full.contains("拒答（"),
+            "前置条件：square 的完整判决应含拒答组：{full}"
+        );
+        assert!(
+            !measured.contains("拒答（"),
+            "过滤版不输出拒答组：{measured}"
+        );
+        let kept: Vec<&str> = full
+            .split('；')
+            .filter(|seg| !seg.starts_with("拒答（"))
+            .collect();
+        assert!(!kept.is_empty());
+        assert_eq!(
+            measured,
+            kept.join("；"),
+            "过滤版应与 Full 去掉拒答组后逐字一致"
+        );
+    }
+
+    #[test]
+    fn measured_verdict_none_when_everything_is_refused() {
+        // 全部量都拒答：过滤版返回 None（GUI 整行隐藏），Full 版仍完整。
+        let mut q = Quality::default();
+        q.verdicts.insert(
+            "some_quantity".to_string(),
+            Verdict::Refused {
+                reason: RefuseReason::CalibrationMissing,
+            },
+        );
+        assert_eq!(verdict_line_measured(&q), None);
+        assert!(verdict_line(&q).is_some(), "Full 版不受过滤版影响");
+        assert_eq!(
+            verdict_line_measured(&Quality::default()),
+            None,
+            "空判决表同样 None"
+        );
     }
 
     #[test]
