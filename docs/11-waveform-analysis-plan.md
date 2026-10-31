@@ -824,6 +824,14 @@ CLI 测试 `measurement_text_carries_transient_and_tie_lines` 钉住 `step_ring`
 瞬态六项与 `TIE: 测不出（边沿太少）`；`ring_alias` 的 CLI 显示仍无专门断言，
 其拒答路径继续由模拟器测试与证据包/MCP 覆盖。
 
+**F2 补记（2026-10-31，过滤渲染）**：CLI 出口改用新增的
+`analysis::transient_tie_lines_measured`（与 GUI 共用同一份人读文本）：
+只显示有值的量，「测不出」整项不再平铺，两通道均无有效量时整块隐藏；
+完整判决仍由 verdict_line 与证据包/MCP 保留。同日修正 `estimate_settling`
+的退化输出——跃变快于采样栅格（片段内全部样点落在阈值带内）时不再记
+0 ns，改走「形状不在可判范围」拒答；三处黄金文本（i2c_100k CH1/CH2、
+uart_115k CH1）的调节时间键随判决更新，已逐行审查 diff。
+
 **F3 · `clock_62k` 场景**：新增 62.5 kHz 慢边沿时钟（周期 13.71 样点，10–90% 3 样点，
 抖动 `[0, +0.5, 0, −0.5]` 样点循环），4096 点给出 298 条上升沿。实测
 ρ = 2.55、σ = 446.5 ns、频率 62517.5 Hz，`tie_sigma_ns` 为 `Ok{±18.320 ns}` ——

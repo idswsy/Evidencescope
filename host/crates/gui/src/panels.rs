@@ -1242,15 +1242,23 @@ fn measure_section(app: &mut App, ui: &mut egui::Ui) {
          · 过冲参考电平为平台均值 · 非周期信号（数据线）的「频率」只是边沿速率，参考意义有限"
     ));
 
-    // 瞬态与 TIE —— 与证据包同一渲染（analysis::transient_tie_lines），单一来源；
-    // 「测不出」与判决纪律（无模型即拒答）由此原样进入界面。
-    ui.add_space(2.0);
-    ui.strong("瞬态与 TIE");
-    for ch in 0..cap.channels.len() {
-        if let Some(ca) = report.channel(ch) {
-            for line in scope_core::analysis::transient_tie_lines(ca) {
-                ui.monospace(format!("CH{:<2} {}", ch + 1, line));
-            }
+    // 瞬态与 TIE —— 过滤渲染（analysis::transient_tie_lines_measured），
+    // 与 CLI 共用同一份人读文本（单一来源）：只显示有值的量；未判定量
+    // 连同原因码由证据包与 MCP 保留，不在此平铺「测不出」。两通道都无
+    // 有效量时整块隐藏。
+    let transient_rows: Vec<(usize, String)> = (0..cap.channels.len())
+        .filter_map(|ch| report.channel(ch).map(|ca| (ch, ca)))
+        .flat_map(|(ch, ca)| {
+            scope_core::analysis::transient_tie_lines_measured(ca)
+                .into_iter()
+                .map(move |line| (ch, line))
+        })
+        .collect();
+    if !transient_rows.is_empty() {
+        ui.add_space(2.0);
+        ui.strong("瞬态与 TIE");
+        for (ch, line) in transient_rows {
+            ui.monospace(format!("CH{:<2} {}", ch + 1, line));
         }
     }
 }

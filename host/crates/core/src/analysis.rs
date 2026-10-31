@@ -803,23 +803,7 @@ pub fn transient_tie_lines(ca: &ChannelAnalysis) -> Vec<String> {
     ];
 
     match &ca.tie {
-        Some(t) => {
-            let grid = if t.grid_limited { "是" } else { "否" };
-            lines.push(format!(
-                "TIE: 边沿数={} ρ={:.2} σ={:.1} ns [CI95 {:.1}, {:.1}] 均值={:.1} ns 峰峰={:.1} ns",
-                t.n_edges,
-                t.rho,
-                t.sigma_tie_ns,
-                t.ci95_low_ns,
-                t.ci95_high_ns,
-                t.mean_tie_ns,
-                t.pk_pk_ns
-            ));
-            lines.push(format!(
-                "     周期抖动 RMS={:.1} ns 峰峰={:.1} ns 单沿地板={:.1} ns 网格受限={grid}",
-                t.period_jitter_rms_ns, t.period_jitter_pk_pk_ns, t.resolution_floor_ns
-            ));
-        }
+        Some(t) => lines.extend(tie_value_lines(t)),
         None => {
             let reason = match ca.quality.verdicts.get("tie_sigma_ns") {
                 Some(Verdict::Refused { reason }) => reason.text(),
@@ -827,6 +811,72 @@ pub fn transient_tie_lines(ca: &ChannelAnalysis) -> Vec<String> {
             };
             lines.push(format!("TIE: 测不出（{reason}）"));
         }
+    }
+    lines
+}
+
+/// TIE 有值时的两行文本。Full 与过滤渲染共用，防止两处措辞漂移。
+fn tie_value_lines(t: &TieStats) -> Vec<String> {
+    let grid = if t.grid_limited { "是" } else { "否" };
+    vec![
+        format!(
+            "TIE: 边沿数={} ρ={:.2} σ={:.1} ns [CI95 {:.1}, {:.1}] 均值={:.1} ns 峰峰={:.1} ns",
+            t.n_edges,
+            t.rho,
+            t.sigma_tie_ns,
+            t.ci95_low_ns,
+            t.ci95_high_ns,
+            t.mean_tie_ns,
+            t.pk_pk_ns
+        ),
+        format!(
+            "     周期抖动 RMS={:.1} ns 峰峰={:.1} ns 单沿地板={:.1} ns 网格受限={grid}",
+            t.period_jitter_rms_ns, t.period_jitter_pk_pk_ns, t.resolution_floor_ns
+        ),
+    ]
+}
+
+/// 瞬态与 TIE 的过滤渲染：只输出有值的量，供人读界面（GUI / CLI）使用。
+///
+/// 与 [`transient_tie_lines`]（证据包 Full 版本）同输入；未判定的量整项
+/// 不输出 —— 完整判决与原因码仍由证据包与 MCP 保留，人读界面不再平铺
+/// 「测不出」。无任何有效量时返回空 Vec，调用方整块隐藏。
+///
+/// 返回的每一行**不带外层缩进**，约定与 [`transient_tie_lines`] 一致。
+pub fn transient_tie_lines_measured(ca: &ChannelAnalysis) -> Vec<String> {
+    let tr = &ca.transient;
+    let mut parts: Vec<String> = Vec::new();
+    // 振铃：有频率给频率，只有上界给上界（「≤」口径与 Full 版一致）。
+    match (tr.ring_freq_hz, tr.ring_freq_upper_hz) {
+        (Some(f), _) => parts.push(format!("振铃={f:.1} Hz")),
+        (None, Some(u)) => parts.push(format!("振铃≤{u:.1} Hz")),
+        (None, None) => {}
+    }
+    if let Some(z) = tr.damping_ratio {
+        parts.push(format!("阻尼比={z:.3}"));
+    }
+    if let Some(v) = tr.settle_2_ns {
+        parts.push(format!("调节(±2%)={v:.1} ns"));
+    }
+    if let Some(v) = tr.settle_5_ns {
+        parts.push(format!("调节(±5%)={v:.1} ns"));
+    }
+    if let Some(v) = tr.rc_tau_ns {
+        parts.push(format!("RC τ={v:.1} ns"));
+    }
+    if let (Some(a), Some(b)) = (tr.slew_max_lsb_per_us, tr.slew_avg_lsb_per_us) {
+        parts.push(format!("压摆(max/avg)={a:.1}/{b:.1} LSB/µs"));
+    }
+    if let Some(n) = tr.runts {
+        parts.push(format!("runt={n}"));
+    }
+
+    let mut lines = Vec::new();
+    if !parts.is_empty() {
+        lines.push(format!("瞬态: {}", parts.join("  ")));
+    }
+    if let Some(t) = &ca.tie {
+        lines.extend(tie_value_lines(t));
     }
     lines
 }
@@ -929,6 +979,142 @@ mod tests {
             .collect();
         cap.channels[0] = s;
         cap
+    }
+
+    fn dc_capture() -> Capture {
+        let rate = 1_000_000u32;
+        let mut cap = Capture::new(8, rate, 1, 4096);
+        cap.channels[0] = vec![2048; 4096];
+        cap
+    }
+
+    fn triangle_capture() -> Capture {
+        // 三角波：无双电平平台（瞬态量全拒答）；边沿规整且
+        // ρ = Tr/Ts ≈ 160/400 = 0.4 在 TIE 适用区间内（TIE 有值）。
+        let rate = 1_000_000u32;
+        let mut cap = Capture::new(9, rate, 1, 4096);
+        let period = 400usize;
+        let half = period / 2;
+        let s: Vec<u16> = (0..4096)
+            .map(|i| {
+                let p = i % period;
+                if p < half {
+                    (4000 * p / half) as u16
+                } else {
+                    (4000 * (period - p) / half) as u16
+                }
+            })
+            .collect();
+        cap.channels[0] = s;
+        cap
+    }
+
+    #[test]
+    fn measured_lines_slew_without_tie_row() {
+        // 三角波：无跃变平台 → 双电平类瞬态量全拒答；线性斜坡给出压摆；
+        // TIE 拒答不输出整行。
+        let cap = triangle_capture();
+        let report =
+            AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim(triangle)", true);
+        let lines = transient_tie_lines_measured(&report.channels[0]);
+        assert_eq!(
+            lines,
+            vec!["瞬态: 压摆(max/avg)=20.0/20.0 LSB/µs".to_string()],
+            "只应剩压摆一行：{lines:?}"
+        );
+    }
+
+    #[test]
+    fn measured_lines_tie_rows_match_the_full_render() {
+        // TIE 有值时，过滤渲染与 Full 渲染的 TIE 行必须逐行相同
+        // （共享 tie_value_lines，防止两处措辞漂移）。
+        let cap = square_capture();
+        let mut report =
+            AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim(square)", true);
+        let ca = &mut report.channels[0];
+        ca.tie = Some(crate::tie::TieStats {
+            n_edges: 40,
+            rho: 0.42,
+            sigma_tie_ns: 4.3,
+            pk_pk_ns: 10.5,
+            mean_tie_ns: -2.1,
+            ci95_low_ns: 3.5,
+            ci95_high_ns: 5.5,
+            resolution_floor_ns: 684.9,
+            period_jitter_rms_ns: 5.8,
+            period_jitter_pk_pk_ns: 21.1,
+            grid_limited: false,
+            method: tie::TieMethod::LinearInterpolation,
+        });
+        let full = transient_tie_lines(ca);
+        let measured = transient_tie_lines_measured(ca);
+        let tie_full: Vec<&String> = full.iter().filter(|l| l.starts_with("TIE")).collect();
+        let tie_measured: Vec<&String> = measured.iter().filter(|l| l.starts_with("TIE")).collect();
+        assert!(!tie_measured.is_empty(), "TIE 有值必须输出：{measured:?}");
+        assert_eq!(tie_full, tie_measured, "TIE 行两版渲染必须一致");
+    }
+
+    #[test]
+    fn measured_lines_keep_only_present_quantities() {
+        // 快边沿方波：runts 可数；振铃/阻尼比/调节时间/RC τ 测不出，
+        // 且快边沿 ρ 远小于 0.35 → TIE 以「边沿异于采样栅格」拒答。
+        let cap = square_capture();
+        let report =
+            AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim(square)", true);
+        let lines = transient_tie_lines_measured(&report.channels[0]);
+        assert_eq!(lines, vec!["瞬态: runt=0".to_string()], "只应剩 runt 一行");
+    }
+
+    #[test]
+    fn measured_lines_empty_when_nothing_is_measured() {
+        // 直流：无边沿，瞬态量全部拒答、TIE 测不出 → 渲染为空。
+        let cap = dc_capture();
+        let report =
+            AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim(dc)", true);
+        let lines = transient_tie_lines_measured(&report.channels[0]);
+        assert!(lines.is_empty(), "无任何有效量时应返回空：{lines:?}");
+    }
+
+    #[test]
+    fn measured_lines_ring_and_damping_without_tie_row() {
+        let cap = square_capture();
+        let mut report =
+            AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim(square)", true);
+        let ca = &mut report.channels[0];
+        ca.transient = TransientStats {
+            ring_freq_hz: Some(12_000.0),
+            damping_ratio: Some(0.35),
+            ..Default::default()
+        };
+        ca.tie = None;
+        let lines = transient_tie_lines_measured(ca);
+        let text = lines.join("\n");
+        assert!(text.contains("振铃=12000.0 Hz"), "振铃格式：\n{text}");
+        assert!(text.contains("阻尼比=0.350"), "阻尼比格式：\n{text}");
+        assert!(
+            !lines.iter().any(|l| l.starts_with("TIE")),
+            "TIE 测不出时不输出 TIE 行：\n{text}"
+        );
+        assert!(
+            !text.contains("测不出"),
+            "过滤渲染不输出「测不出」：\n{text}"
+        );
+    }
+
+    #[test]
+    fn measured_lines_ring_upper_bound_format() {
+        // 只有振铃上界时用「≤」口径，与 Full 版一致。
+        let cap = square_capture();
+        let mut report =
+            AnalysisReport::from_capture(&cap, &ScaleSet::uncalibrated(1), "sim(square)", true);
+        let ca = &mut report.channels[0];
+        ca.transient = TransientStats {
+            ring_freq_upper_hz: Some(10_714.3),
+            ..Default::default()
+        };
+        ca.tie = None;
+        let lines = transient_tie_lines_measured(ca);
+        assert_eq!(lines, vec!["瞬态: 振铃≤10714.3 Hz".to_string()]);
     }
 
     #[test]

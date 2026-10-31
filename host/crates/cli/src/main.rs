@@ -653,7 +653,10 @@ fn measurement_text(
             m.edges
         );
 
-        for line in scope_core::analysis::transient_tie_lines(ca) {
+        // 瞬态与 TIE —— 过滤渲染（analysis::transient_tie_lines_measured），
+        // 与 GUI 同一份人读文本：只显示有值的量；未判定量连同原因码由
+        // 证据包与 MCP 保留，下方 verdict_line 仍是完整判决。
+        for line in scope_core::analysis::transient_tie_lines_measured(ca) {
             let _ = writeln!(out, "    {line}");
         }
         // 可信度行 —— 与证据包 / GUI 同一份文本（verdict_line），CLI 不另写措辞。
@@ -1439,10 +1442,10 @@ mod tests {
         assert!(e.contains("24 个字符"), "错误要写清格式：{e}");
     }
 
-    /// F2：`sim measure` 与 `import` 必须与证据包用同一套瞬态 / TIE 措辞。
+    /// F2：`sim measure` 与 `import` 的瞬态 / TIE 行与 GUI 用同一份过滤渲染。
     ///
-    /// 回归：这两个出口从前只打印基础测量，瞬态与 TIE 只存在于证据包和
-    /// MCP 里 —— 同一份数据在 CLI 上看不见。
+    /// 人读界面只显示有值的量（过滤渲染）；TIE 测不出时整行消失，完整判决
+    /// 仍由 verdict_line 与证据包保留 —— 此处一并钉住这一呈现契约。
     #[test]
     fn measurement_text_carries_transient_and_tie_lines() {
         let cap = sim_capture(Scenario::StepRing, 1024);
@@ -1464,8 +1467,12 @@ mod tests {
             assert!(text.contains(want), "缺「{want}」：\n{text}");
         }
         assert!(
-            text.contains("TIE: 测不出（边沿太少）"),
-            "step_ring 的 TIE 必须写明原因，而不是静默省略：\n{text}"
+            !text.contains("TIE:"),
+            "TIE 测不出时过滤渲染整行省略：\n{text}"
+        );
+        assert!(
+            !text.contains("测不出（边沿太少）"),
+            "人读界面不再平铺「测不出」：\n{text}"
         );
     }
 

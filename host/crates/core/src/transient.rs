@@ -329,8 +329,10 @@ fn estimate_settling(
             }
         }
         let Some(last) = last_outside else {
-            // 一开始就在带内。
-            values.push(0.0);
+            // 一开始就在带内：跃变快于采样栅格，片段内没有可分辨的
+            // 调节过程。记 0 ns 会伪装成「瞬间稳定」的精确测量，与
+            // 「直到片段结束都没进入带内」同样按无有效过程跳过；
+            // 全部片段都跳过时由 mean 的 None 走拒答。
             continue;
         };
         if !entered {
@@ -774,6 +776,34 @@ mod tests {
             "±5% 调节时间 {ts5} ns 不在峰值离散化允许区间 [67.0, 108.7] µs"
         );
         assert_eq!(a.stats.runts, Some(0), "step_ring 没有 runt");
+    }
+
+    #[test]
+    fn fast_edge_square_settling_is_refused_not_zero() {
+        // 快边沿方波（跃变在相邻两样点间完成）：跃变片段内全部样点都
+        // 在阈值带内，没有可分辨的调节过程。调节时间必须拒答
+        // （ShapeUnrecognized），不得输出 0.0 ns 的退化值。
+        let s = pwm_with_runts();
+        let a = analyze(&s, RATE);
+
+        assert!(
+            a.stats.settle_2_ns.is_none(),
+            "快边沿方波的 ±2% 调节时间应拒答，实际 {:?}",
+            a.stats.settle_2_ns
+        );
+        assert!(
+            a.stats.settle_5_ns.is_none(),
+            "快边沿方波的 ±5% 调节时间应拒答，实际 {:?}",
+            a.stats.settle_5_ns
+        );
+        assert_eq!(
+            a.reasons.get(SETTLE_2_KEY),
+            Some(&TransientReason::ShapeUnrecognized)
+        );
+        assert_eq!(
+            a.reasons.get(SETTLE_5_KEY),
+            Some(&TransientReason::ShapeUnrecognized)
+        );
     }
 
     #[test]
