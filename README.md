@@ -63,13 +63,15 @@ GUI 断开释放串口 → 初始化 MCP 会话 → 连接设备 → 15 个工�
 
 ### 模拟观测与真机实测
 
-| 二阶欠阻尼系统的阶跃响应 | 真机串口实测的一次采集 |
-|---|---|
-| <img src="docs/assets/gui-step-response.png" alt="阶跃响应的过冲与振铃" width="420"> | <img src="docs/assets/gui-serial-capture.png" alt="真机一次采集的波形与测量" width="420"> |
+<p align="center">
+  <img src="docs/assets/gui-step-response.png" alt="二阶欠阻尼系统的阶跃响应" width="420">
+  <img src="docs/assets/gui-serial-capture.png" alt="真机串口实测的一次采集" width="420">
+</p>
 
-左：`step_ring` 场景，过冲 ≈31% 与衰减振铃清晰可辨。该过冲是
-`exp(-πζ/√(1-ζ²))` 在 ζ = 0.35 下的值——场景文档、实现与测试断言引用同一个解析式。
-右：设备经 COM 口以 921600 接入，触发一次采集得到 4096 点波形，时间窗 4.778 ms。
+左：**二阶欠阻尼系统的阶跃响应**——`step_ring` 场景，过冲 ≈31% 与衰减振铃清晰可辨。
+该过冲是 `exp(-πζ/√(1-ζ²))` 在 ζ = 0.35 下的值，场景文档、实现与测试断言引用同一个
+解析式。右：**真机串口实测的一次采集**——设备经 COM 口以 921600 接入，触发一次采集得
+到 4096 点波形，时间窗 4.778 ms。
 
 **真机实测结果**
 
