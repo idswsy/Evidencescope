@@ -1,10 +1,101 @@
 # EvidenceScope
 
-[![CI](https://github.com/idswsy/evidencescope/actions/workflows/ci.yml/badge.svg)](https://github.com/idswsy/evidencescope/actions/workflows/ci.yml)
+<p align="center">
+  <img src="docs/assets/gui-i2c-decode.png" alt="EvidenceScope 主界面：I2C 双通道采集与解码" width="860"><br>
+  <sub>857 142 Hz 采集 4096 点：双泳道波形叠加逐位解码色带，右侧为 AI 分析面板</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/idswsy/evidencescope/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/idswsy/evidencescope/ci.yml?label=CI" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue" alt="License: GPL v3"></a>
+  <img src="https://img.shields.io/badge/MCU-STM32F103C8T6-orange" alt="STM32F103C8T6">
+  <img src="https://img.shields.io/badge/Rust-8%20crates-informational" alt="8 crates">
+</p>
 
 > 面向 AI Agent 的波形证据化分析与总线解码系统：Agent 经标准 MCP 协议单条指令
 > 完成波形采集、协议解码与信号质量判定，每个测量量携带不确定度、量化边界或
 > 带原因码的显式拒答，结论建立在可核验的证据之上。
+
+**目录** · [演示](#演示) · [概述](#1-概述) · [AI 分析系统](#2-ai-分析系统) ·
+[核心算法](#3-核心算法) · [能力与边界](#4-能力与边界) · [系统架构](#5-系统架构) ·
+[仓库结构](#6-仓库结构) · [快速开始](#7-快速开始) · [路线图](#8-路线图) ·
+[硬件约束](#9-硬件约束) · [许可与致谢](#10-许可与致谢)
+
+---
+
+## 演示
+
+以下四组截图全部来自真实运行，非设计稿或渲染图。
+
+### AI 分析当前采集
+
+模型解释界面上**已经算好的**一窗数据，不重新触发采集，因此响应在秒级：
+
+<p align="center">
+  <img src="docs/assets/ai-analyze-current.png" alt="AI 分析面板解释当前一窗真机采集" width="860">
+</p>
+
+真机 COM6 @ 921600 链路的第 99 次采集（4096 点 @ 857 142 Hz）。证据包 1878 字符，
+`deepseek-flash` 用时 0.5 s，按「波形状态 / 问题 / 建议」三节返回：判定方波
+（双电平占用率 0.99，`Vlo/Vhi` = 888/1981 LSB，间隔变异系数 cv = 0.00（n = 9），
+周期稳定），频率 2000.1 Hz，跃变 20，runt = 0。
+
+上升与下降时间只给出下界 `≥933.3 ns`——857 kSPS 下 10%–90% 过渡不足一个采样
+周期，边沿细节落在样点之间。这正是 §2.2 三态判决中 `Bounded` 的形态。
+
+### 一句话交给 AI 采集
+
+「交给 AI 采集」按钮把设备交接给 `scope-mcp` 子进程，GUI 退居 MCP 客户端，
+由 Agent 自行配置、采集与解读：
+
+<p align="center">
+  <img src="docs/assets/ai-takeover-capture.png" alt="交给 AI 采集：Agent 自主完成配置与采集后的分析结论" width="860">
+</p>
+
+需求「帮我采集并分析 COM6 端口的信号」触发一次完整会话，日志逐行留痕：
+GUI 断开释放串口 → 初始化 MCP 会话 → 连接设备 → 15 个工具可用 → 采到第 110 帧
+（4096 点）并上屏 → 会话结束收回设备 → 重试连接，改动保留在设备上。
+
+结论首句即自我声明数据来源为真机（`simulated = false`，标定已生效），随后给出
+方波 2.000 kHz、峰峰 3.716 V、占空比 74.88%、边沿数 20、runt 0；上升与下降时间在
+面板上为 `null`（NotApplicable）——测量层不给数，而不是给一个看似精确的数字。
+「动作轨迹」可逐步复核 Agent 的每一次工具调用。
+
+### 模拟观测与真机实测
+
+| 二阶欠阻尼系统的阶跃响应 | 真机串口实测的一次采集 |
+|---|---|
+| <img src="docs/assets/gui-step-response.png" alt="阶跃响应的过冲与振铃" width="420"> | <img src="docs/assets/gui-serial-capture.png" alt="真机一次采集的波形与测量" width="420"> |
+
+左：`step_ring` 场景，过冲 ≈31% 与衰减振铃清晰可辨。该过冲是
+`exp(-πζ/√(1-ζ²))` 在 ζ = 0.35 下的值——场景文档、实现与测试断言引用同一个解析式。
+右：设备经 COM 口以 921600 接入，触发一次采集得到 4096 点波形，时间窗 4.778 ms。
+
+**真机实测结果**
+
+| 项目 | 结果 |
+|---|---|
+| 协议链路 | 921600 8N1 实测稳定，4096 点采集成功 |
+| 采样时基 | 857 142 Hz，与理论值 857.14 kSPS 一致 |
+| 静默本底噪声 | 峰峰值 6 LSB |
+| UART 真机解码 | 48 帧全部通过停止位校验，误帧数 0 |
+| 帧间距 | 74.4 样点（115200 baud），与理论值一致 |
+
+首轮真机测试发现并修复三处模拟器与真机的行为分歧（触发配置顺序、UART 前端
+反相、帧计数器下溢），修复后两端行为一致，模拟器场景因此可以作为算法回归的
+可靠载体。
+
+### 不连硬件跑一遍
+
+```bash
+./proto/run_tests.sh      # C 端黄金向量，50 项
+./host/run.sh test        # Rust 全量测试
+./firmware/run_tests.sh   # 固件 App 层 252 项断言，在 PC 上运行
+./host/run.sh run -p scope-cli -- sim decode --protocol i2c --scenario i2c_100k -n 4096
+./host/run.sh run -p scope-gui -- --demo --scenario step_ring
+```
+
+全部通过即环境就绪，不需要硬件。18 个模拟器场景与完整命令见 §7.1。
 
 ---
 
@@ -61,7 +152,8 @@ I2C 解码的瓶颈是边沿时间精度，不是采样率。两条测量通路�
 3. **GUI「交给 AI 采集」** —— GUI 将设备交接给 `scope-mcp` 子进程并充当
    MCP 客户端，由 Agent 自行配置、采集、分析；操作流程见 §7.4.4。
 
-真机串口为独占资源，三条路径不能同时连接同一台设备。
+真机串口为独占资源，三条路径不能同时连接同一台设备。②③ 两条 GUI 路径的真机
+实录见 [演示](#演示)。
 
 ### 2.2 证据化判决体系
 
@@ -161,6 +253,11 @@ ADC 与内存带宽。I2C 解码只依赖边沿时刻序列，与 ADC 采样率�
 专职信号质量观测。该通路的固件侧采集属路线图 P2 进行中项（见 §8），主机侧
 解码已实现并经模拟器场景回归。
 
+<p align="center">
+  <img src="docs/assets/dual-path-timing.png" alt="双通路测量分工示意" width="860"><br>
+  <sub>左：等间隔采样下样点相位相对边沿漂移；右：比较器通路在每个上升沿锁存一个 13.9 ns 时间戳</sub>
+</p>
+
 ### 3.2 噪声底自标定的迟滞边沿判定
 
 对相邻样点的一阶差分取绝对中位差（MAD），得到噪声标准差的无参考估计：
@@ -243,6 +340,13 @@ TIEk = tk − (t0 + k·T̂)                        （5）
 ---
 
 ## 5 系统架构
+
+<p align="center">
+  <img src="docs/assets/architecture.png" alt="系统总体架构" width="1000"><br>
+  <sub>五层分层：AI 接入 · 上位机软件 · 协议 · 固件 · 硬件；GUI / CLI / MCP 三个入口共用 scope-core 命令层</sub>
+</p>
+
+同一张图的文本形式，便于 diff 与检索：
 
 ```
   外部 Agent（Claude Code 等）        桌面 GUI（scope-gui）
