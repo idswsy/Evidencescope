@@ -1498,47 +1498,52 @@ fn drive_section(app: &mut App, ui: &mut egui::Ui) {
     };
     ui.colored_label(color, label);
 
-    // 轨迹
-    egui::ScrollArea::vertical()
-        .id_salt("drive_trace")
-        .max_height(180.0)
-        .auto_shrink([false, true])
+    // 轨迹 —— 可折叠：几十条工具调用往返挤占右侧面板，阶段横幅与结论
+    // 常显即可。展开状态由 egui 按标题记忆（会话内折叠一次即保持）。
+    egui::CollapsingHeader::new(egui::RichText::new("动作轨迹").weak())
+        .default_open(true)
         .show(ui, |ui| {
-            for item in &app.drive.trajectory {
-                match item {
-                    TrajectoryItem::Phase(p) => {
-                        ui.small(egui::RichText::new(format!("· {p}")).weak());
-                    }
-                    TrajectoryItem::Call { name, args } => {
-                        ui.small(format!("→ {name}  {args}"));
-                    }
-                    TrajectoryItem::Result { name, ok, summary } => {
-                        let mark = if *ok { "✓" } else { "✗" };
-                        let text = format!("   {mark} {name}：{summary}");
-                        if *ok {
-                            ui.small(text);
-                        } else {
-                            ui.small(egui::RichText::new(text).color(egui::Color32::RED));
+            egui::ScrollArea::vertical()
+                .id_salt("drive_trace")
+                .max_height(180.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for item in &app.drive.trajectory {
+                        match item {
+                            TrajectoryItem::Phase(p) => {
+                                ui.small(egui::RichText::new(format!("· {p}")).weak());
+                            }
+                            TrajectoryItem::Call { name, args } => {
+                                ui.small(format!("→ {name}  {args}"));
+                            }
+                            TrajectoryItem::Result { name, ok, summary } => {
+                                let mark = if *ok { "✓" } else { "✗" };
+                                let text = format!("   {mark} {name}：{summary}");
+                                if *ok {
+                                    ui.small(text);
+                                } else {
+                                    ui.small(egui::RichText::new(text).color(egui::Color32::RED));
+                                }
+                            }
+                            // 警告要显眼 —— 它讲的往往是「用户以为已生效，实际未生效」
+                            TrajectoryItem::Warning(w) => {
+                                ui.small(
+                                    egui::RichText::new(format!("   ⚠ {w}"))
+                                        .color(egui::Color32::from_rgb(230, 160, 30)),
+                                );
+                            }
+                            TrajectoryItem::Capture {
+                                id,
+                                points,
+                                channels,
+                            } => {
+                                ui.small(format!(
+                                    "   ▤ 采集 #{id}  {points} 点 × {channels} 通道 —— 已上屏"
+                                ));
+                            }
                         }
                     }
-                    // 警告要显眼 —— 它讲的往往是「用户以为已生效，实际未生效」
-                    TrajectoryItem::Warning(w) => {
-                        ui.small(
-                            egui::RichText::new(format!("   ⚠ {w}"))
-                                .color(egui::Color32::from_rgb(230, 160, 30)),
-                        );
-                    }
-                    TrajectoryItem::Capture {
-                        id,
-                        points,
-                        channels,
-                    } => {
-                        ui.small(format!(
-                            "   ▤ 采集 #{id}  {points} 点 × {channels} 通道 —— 已上屏"
-                        ));
-                    }
-                }
-            }
+                });
         });
 
     // AI 的最终结论
