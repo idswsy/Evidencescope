@@ -313,10 +313,32 @@ impl App {
             // 重新连上 → 回到 Idle
             DrivePhase::Reconnecting if self.connected => {
                 self.drive.phase = DrivePhase::Idle;
+                self.drive.reconnect_retry = None;
                 self.note(format!(
                     "设备已收回。AI 的改动保留在设备上，可用「{}」改回",
                     drive::RESTORE_LABEL
                 ));
+            }
+            // 重连失败后的定时重试：到点重发 Connect（计划由 Failed 臂安排，
+            // sent 标记防止到点与回执之间的每帧重复发送）。
+            DrivePhase::Reconnecting => {
+                if let Some(mut r) = self.drive.reconnect_retry {
+                    if !r.sent && std::time::Instant::now() >= r.due {
+                        if let Some(h) = self.drive.handoff.clone() {
+                            r.sent = true;
+                            self.drive.reconnect_retry = Some(r);
+                            self.note("收回设备：重试连接");
+                            self.worker.send(Request::Connect {
+                                transport: h.transport,
+                                port: h.port,
+                                baud: h.baud,
+                                scenario: h.scenario,
+                            });
+                        }
+                    }
+                    // 挂起重试期间保持 UI 定时醒来，到点能推进一步
+                    ctx.request_repaint_after(drive::RECONNECT_RETRY_DELAY);
+                }
             }
             _ => {}
         }
@@ -720,6 +742,33 @@ impl App {
 
             Update::Failed { text, hint } => {
                 self.acquire_in_flight = false;
+                // 收回设备的重连失败：几乎总是「AI 子进程的串口句柄还没
+                // 被 OS 释放」的收场竞态（优雅收场与自动重连并行赛跑）。
+                // 自动重试兜住这个窗口，不把它当手动连接失败弹给用户去猜。
+                if self.drive.phase == DrivePhase::Reconnecting {
+                    let left = self
+                        .drive
+                        .reconnect_retry
+                        .take()
+                        .map_or(drive::RECONNECT_RETRIES, |r| r.left)
+                        .saturating_sub(1);
+                    if left > 0 {
+                        self.drive.reconnect_retry = Some(drive::ReconnectRetry {
+                            left,
+                            due: std::time::Instant::now() + drive::RECONNECT_RETRY_DELAY,
+                            sent: false,
+                        });
+                        self.note(format!(
+                            "收回设备：串口句柄释放中，{} ms 后重试（剩 {} 次）",
+                            drive::RECONNECT_RETRY_DELAY.as_millis(),
+                            left
+                        ));
+                    } else {
+                        self.drive.phase = DrivePhase::Idle;
+                        self.note("收回设备失败：串口仍被占用。AI 子进程已退出，请手动连接");
+                    }
+                    return;
+                }
                 self.note(format!("✗ {text}"));
                 self.last_error = Some((text, hint));
                 // 连续刷新的失败即停止循环 —— 不静默重试（docs/09 §8）。

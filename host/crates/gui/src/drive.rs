@@ -1163,6 +1163,26 @@ pub const RESTORE_LABEL: &str = "恢复交接前的设置";
 /// 不是归档。与 `App::note` 的 200 行同一个道理。
 pub const TRAJECTORY_CAP: usize = 200;
 
+/// 收回设备的重连失败后自动重试的次数与间隔。
+///
+/// 背景：会话线程的优雅收场（scope_disconnect → 子进程退出 → OS 释放
+/// 串口句柄）与 UI 的自动重连**并行赛跑** —— Windows 句柄没释放完就
+/// `open` 会返回「拒绝访问」（见 `McpProcess::shutdown` 的注释）。
+/// 重试兜住这个窗口，也覆盖 `terminate` 硬杀路径的句柄释放延迟。
+pub const RECONNECT_RETRIES: u32 = 3;
+pub const RECONNECT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// 一次「收回设备」的自动重试计划。
+#[derive(Debug, Clone, Copy)]
+pub struct ReconnectRetry {
+    /// 还剩几次尝试。
+    pub left: u32,
+    /// 到这个时刻才重发 Connect。
+    pub due: std::time::Instant,
+    /// 已重发、尚未收到失败回执 —— 防止每帧重复发 Connect。
+    pub sent: bool,
+}
+
 /// 「让 AI 自己配置并采集」这一摊状态。
 ///
 /// 单独成组而不是往 `App` 上再摊七八个字段：这块与设备 worker **互斥**
@@ -1181,6 +1201,8 @@ pub struct DriveState {
     pub handoff: Option<Handoff>,
     /// AI 的最终结论。
     pub final_text: Option<String>,
+    /// 收回设备的重连失败后的自动重试计划。`None` = 没有挂起的重试。
+    pub reconnect_retry: Option<ReconnectRetry>,
     /// 世代号：迟到的会话事件靠它丢弃。
     generation: u64,
 }
